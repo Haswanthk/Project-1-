@@ -130,70 +130,83 @@ export function AIAssistantPage() {
       if (!activeConvId) {
         activeConvId = Date.now().toString();
         setCurrentConversationId(activeConvId);
-        setConversations(prev => [{ id: activeConvId!, title: currentInput.substring(0, 30) + '...', updatedAt: new Date().toISOString() }, ...prev]);
+        setConversations(prev => [{ id: activeConvId!, title: currentInput.substring(0, 40) + '...', updatedAt: new Date().toISOString() }, ...prev]);
       }
 
-      // Use native fetch for streaming
-      const response = await fetch('/ai/chat/stream', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          content: currentInput,
-          conversation_id: activeConvId,
-          dataset_context: selectedDataset || null
-        })
-      });
+      // Get auth token for streaming request
+      const { useAuthStore } = await import('../state/authStore');
+      const token = useAuthStore.getState().accessToken;
 
-      if (!response.body) throw new Error('No response body');
-      
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let done = false;
+      const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? '/api/v1').replace(/\/$/, '');
+
+      // Try SSE streaming endpoint first
       let aiContent = '';
-      let buffer = '';
+      try {
+        const response = await fetch(`${baseUrl}/ai/chat/stream`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            content: currentInput,
+            conversation_id: activeConvId,
+            dataset_context: selectedDataset || null,
+          }),
+        });
 
-      while (!done) {
-        const { value, done: readerDone } = await reader.read();
-        if (value) {
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const dataStr = line.slice(6).trim();
-              if (!dataStr || dataStr === '[DONE]') {
-                if (dataStr === '[DONE]') done = true;
-                continue;
-              }
-              try {
-                const data = JSON.parse(dataStr);
-                if (data.content) {
-                  aiContent += data.content;
-                  setStreamingMessage(aiContent);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.body) throw new Error('No response body');
+
+        const reader  = response.body.getReader();
+        const decoder = new TextDecoder();
+        let done   = false;
+        let buffer = '';
+
+        while (!done) {
+          const { value, done: readerDone } = await reader.read();
+          if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const dataStr = line.slice(6).trim();
+                if (!dataStr || dataStr === '[DONE]') {
+                  if (dataStr === '[DONE]') done = true;
+                  continue;
                 }
-                if (data.done) {
-                  done = true;
-                }
-              } catch (e) {
-                // Ignore incomplete JSON chunks parse errors
+                try {
+                  const data = JSON.parse(dataStr);
+                  if (data.content) {
+                    aiContent += data.content;
+                    setStreamingMessage(aiContent);
+                  }
+                  if (data.done) done = true;
+                } catch (_) { /* incomplete JSON chunk */ }
               }
             }
           }
+          if (readerDone) done = true;
         }
-        if (readerDone) done = true;
+      } catch (streamErr) {
+        // Fallback: non-streaming /ai/chat-with-data
+        console.warn('SSE stream failed, using fallback:', streamErr);
+        const fallback = await apiClient.post('/ai/chat-with-data', { prompt: currentInput });
+        aiContent = fallback.data?.response ?? 'Unable to generate a response.';
+        setStreamingMessage(aiContent);
       }
-      
+
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'ai', content: aiContent }]);
     } catch (error) {
-      console.error('Streaming error', error);
-      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'ai', content: 'An error occurred while generating the response.' }]);
+      console.error('Chat error', error);
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'ai', content: 'An error occurred while generating the response. Please try again.' }]);
     } finally {
       setIsStreaming(false);
       setStreamingMessage('');
     }
+
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
