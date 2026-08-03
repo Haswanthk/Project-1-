@@ -48,7 +48,7 @@ class MLService:
             metric_value = (
                 accuracy_score(y_test, predictions)
                 if payload.problem_type == "classification"
-                else mean_squared_error(y_test, predictions, squared=False)
+                else float(np.sqrt(mean_squared_error(y_test, predictions)))
             )
             mlflow.log_param("problem_type", payload.problem_type)
             mlflow.log_param("model_type", payload.model_type)

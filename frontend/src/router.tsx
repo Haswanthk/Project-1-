@@ -4,8 +4,11 @@ import { AppShell } from './ui/layout/AppShell'
 import { LoginPage } from './ui/pages/LoginPage'
 import { RegisterPage } from './ui/pages/RegisterPage'
 import { useAuthStore } from './ui/state/authStore'
-import { DashboardPage } from './ui/pages/DashboardPage'
 
+import { DashboardPage } from './ui/pages/DashboardPage'
+import { AnalyticsPage } from './ui/pages/AnalyticsPage'
+import { AnomalyPage } from './ui/pages/AnomalyPage'
+import { ForecastPage } from './ui/pages/ForecastPage'
 import { DatasetUploadPage } from './ui/pages/DatasetUploadPage'
 import { ProjectsPage } from './ui/pages/ProjectsPage'
 import { DataProfilingPage } from './ui/pages/DataProfilingPage'
@@ -26,42 +29,53 @@ import { DataConnectorsPage } from './ui/pages/DataConnectorsPage'
 import { WorkspacePage } from './ui/pages/WorkspacePage'
 
 function ProtectedOutlet() {
-  const token = useAuthStore((state) => state.accessToken)
-  if (!token) {
-    return <Navigate to="/login" replace />
-  }
+  const token = useAuthStore(state => state.accessToken)
+  if (!token) return <Navigate to="/login" replace />
   return <Outlet />
 }
 
 export function AppRouter() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
+      <Route path="/login"    element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+
       <Route element={<ProtectedOutlet />}>
         <Route element={<AppShell />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
+
+          {/* ── Analytics ── */}
+          <Route path="/dashboard"  element={<DashboardPage />} />
+          <Route path="/analytics"  element={<AnalyticsPage />} />
+          <Route path="/anomaly"    element={<AnomalyPage />} />
+          <Route path="/forecast"   element={<ForecastPage />} />
+
+          {/* ── Data ── */}
           <Route path="/dataset-upload" element={<DatasetUploadPage />} />
-          <Route path="/connectors" element={<DataConnectorsPage />} />
-          <Route path="/workspace" element={<WorkspacePage />} />
-          <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/workspace"      element={<WorkspacePage />} />
+          <Route path="/connectors"     element={<DataConnectorsPage />} />
           <Route path="/data-profiling" element={<DataProfilingPage />} />
-          <Route path="/spark-jobs" element={<SparkJobsPage />} />
-          <Route path="/streaming" element={<StreamingPage />} />
-          <Route path="/ml-models" element={<MLModelsPage />} />
-          <Route path="/training" element={<TrainingPage />} />
-          <Route path="/predictions" element={<PredictionsPage />} />
+          <Route path="/projects"       element={<ProjectsPage />} />
+
+          {/* ── ML ── */}
+          <Route path="/ml-models"      element={<MLModelsPage />} />
+          <Route path="/training"       element={<TrainingPage />} />
+          <Route path="/predictions"    element={<PredictionsPage />} />
           <Route path="/model-registry" element={<ModelRegistryPage />} />
-          <Route path="/ai-assistant" element={<AIAssistantPage />} />
-          <Route path="/reports" element={<ReportsPage />} />
-          <Route path="/monitoring" element={<MonitoringPage />} />
-          <Route path="/notifications" element={<NotificationsPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/admin" element={<AdminPanelPage />} />
+
+          {/* ── Platform ── */}
+          <Route path="/streaming"      element={<StreamingPage />} />
+          <Route path="/spark-jobs"     element={<SparkJobsPage />} />
+          <Route path="/ai-assistant"   element={<AIAssistantPage />} />
+          <Route path="/reports"        element={<ReportsPage />} />
+          <Route path="/monitoring"     element={<MonitoringPage />} />
+          <Route path="/notifications"  element={<NotificationsPage />} />
+          <Route path="/settings"       element={<SettingsPage />} />
+          <Route path="/profile"        element={<ProfilePage />} />
+          <Route path="/admin"          element={<AdminPanelPage />} />
         </Route>
       </Route>
+
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   )

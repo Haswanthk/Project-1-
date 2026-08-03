@@ -2,19 +2,20 @@ import random
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.core.deps import get_current_user
 
 router = APIRouter()
 
 _NODES = [
-    {"id": "node-1", "name": "api-server-01", "host": "localhost:8001", "role": "api", "region": "us-east-1"},
-    {"id": "node-2", "name": "spark-worker-01", "host": "spark:7077", "role": "spark", "region": "us-east-1"},
-    {"id": "node-3", "name": "kafka-broker-01", "host": "kafka:9092", "role": "streaming", "region": "us-east-1"},
-    {"id": "node-4", "name": "mlflow-server", "host": "localhost:5000", "role": "mlflow", "region": "us-east-1"},
-    {"id": "node-5", "name": "postgres-primary", "host": "localhost:5432", "role": "database", "region": "us-east-1"},
-    {"id": "node-6", "name": "redis-cache", "host": "localhost:6379", "role": "cache", "region": "us-east-1"},
+    {"id": "node-1", "name": "api-server-01",   "host": "localhost:8001", "role": "api",      "region": "us-east-1"},
+    {"id": "node-2", "name": "spark-worker-01",  "host": "spark:7077",     "role": "spark",    "region": "us-east-1"},
+    {"id": "node-3", "name": "kafka-broker-01",  "host": "kafka:9092",     "role": "streaming","region": "us-east-1"},
+    {"id": "node-4", "name": "mlflow-server",    "host": "localhost:5000",  "role": "mlflow",   "region": "us-east-1"},
+    {"id": "node-5", "name": "postgres-primary", "host": "localhost:5432",  "role": "database", "region": "us-east-1"},
+    {"id": "node-6", "name": "redis-cache",      "host": "localhost:6379",  "role": "cache",    "region": "us-east-1"},
 ]
 
 _MODEL_DRIFT: list[dict[str, Any]] = [
@@ -34,7 +35,63 @@ _MODEL_DRIFT: list[dict[str, Any]] = [
         "status": "OK",
         "drifted_features": [],
     },
+    {
+        "model_name": "XGBoostClassifier_fraud.pkl",
+        "last_checked": "2026-07-27T08:00:00Z",
+        "feature_drift_score": 0.004,
+        "prediction_drift_score": 0.003,
+        "status": "OK",
+        "drifted_features": [],
+    },
 ]
+
+# Mutable alerts store so PATCH can update resolved state
+_ALERTS: list[dict[str, Any]] = [
+    {
+        "id": "1",
+        "severity": "warning",
+        "title": "Feature drift detected",
+        "description": "RandomForestClassifier_churn: user_activity_score drift = 6.2%",
+        "fired_at": "2026-07-26T19:10:00Z",
+        "resolved": False,
+    },
+    {
+        "id": "2",
+        "severity": "info",
+        "title": "Spark job completed",
+        "description": "ETL_Sales_Aggregation processed 1.2M records in 45s",
+        "fired_at": "2026-07-26T18:01:00Z",
+        "resolved": True,
+    },
+    {
+        "id": "3",
+        "severity": "error",
+        "title": "Kafka consumer lag spike",
+        "description": "Topic sensor-telemetry-v1 consumer lag at 12,400 messages",
+        "fired_at": "2026-07-26T20:00:00Z",
+        "resolved": False,
+    },
+    {
+        "id": "4",
+        "severity": "warning",
+        "title": "High memory on spark-worker-01",
+        "description": "spark-worker-01 memory usage at 91.2% — approaching OOM threshold",
+        "fired_at": "2026-07-25T07:30:00Z",
+        "resolved": False,
+    },
+    {
+        "id": "5",
+        "severity": "info",
+        "title": "Model registry update",
+        "description": "XGBoostClassifier_fraud v2.1 promoted to production registry",
+        "fired_at": "2026-07-24T14:00:00Z",
+        "resolved": True,
+    },
+]
+
+
+class AlertPatchRequest(BaseModel):
+    resolved: bool
 
 
 @router.get("/health")
@@ -56,10 +113,13 @@ def health(_: object = Depends(get_current_user)):
 def list_nodes(_: object = Depends(get_current_user)):
     enriched = []
     for node in _NODES:
+        cpu = round(random.uniform(5, 45), 1)
+        mem = round(random.uniform(30, 85), 1)
         enriched.append({
             **node,
             "status": "ONLINE" if random.random() > 0.1 else "DEGRADED",
-            "cpu_usage": round(random.uniform(5, 45), 1),
+            "cpu_usage": cpu,
+            "memory_usage": mem,
             "memory_mb": random.randint(512, 8192),
             "latency_ms": round(random.uniform(2, 40), 1),
             "uptime_hours": random.randint(10, 720),
@@ -84,13 +144,19 @@ def metrics_summary(_: object = Depends(get_current_user)):
 
 @router.get("/metrics/timeseries")
 def metrics_timeseries(_: object = Depends(get_current_user)):
-    hours = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+    hours = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00",
+             "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
     return {
         "timestamps": hours,
         "api_requests": [1200, 1800, 2400, 2100, 3100, 4200, 3900, 4800, 5200, 4900, 5800, 6100],
-        "events_per_min": [850000, 920000, 1100000, 1050000, 1250000, 1380000, 1310000, 1420000, 1490000, 1410000, 1530000, 1600000],
+        "events_per_min": [850000, 920000, 1100000, 1050000, 1250000, 1380000,
+                           1310000, 1420000, 1490000, 1410000, 1530000, 1600000],
         "error_rate": [0.02, 0.01, 0.03, 0.01, 0.02, 0.04, 0.02, 0.01, 0.03, 0.02, 0.01, 0.02],
         "p99_latency_ms": [18.2, 19.5, 21.0, 18.8, 22.4, 25.1, 23.0, 20.2, 19.8, 21.5, 18.9, 19.2],
+        # Extra fields required by MonitoringPage timeseries chart
+        "requests": [1200, 1800, 2400, 2100, 3100, 4200, 3900, 4800, 5200, 4900, 5800, 6100],
+        "errors": [12, 18, 24, 21, 31, 42, 39, 48, 52, 49, 58, 61],
+        "cpu": [22, 28, 34, 30, 42, 55, 50, 60, 65, 58, 70, 68],
     }
 
 
@@ -101,29 +167,13 @@ def model_drift(_: object = Depends(get_current_user)):
 
 @router.get("/alerts")
 def get_alerts(_: object = Depends(get_current_user)):
-    return [
-        {
-            "id": 1,
-            "severity": "warning",
-            "title": "Feature drift detected",
-            "description": "RandomForestClassifier_churn: user_activity_score drift = 6.2%",
-            "fired_at": "2026-07-26T19:10:00Z",
-            "resolved": False,
-        },
-        {
-            "id": 2,
-            "severity": "info",
-            "title": "Spark job completed",
-            "description": "ETL_Sales_Aggregation processed 1.2M records in 45s",
-            "fired_at": "2026-07-26T18:01:00Z",
-            "resolved": True,
-        },
-        {
-            "id": 3,
-            "severity": "error",
-            "title": "Kafka consumer lag spike",
-            "description": "Topic sensor-telemetry-v1 consumer lag at 12,400 messages",
-            "fired_at": "2026-07-26T20:00:00Z",
-            "resolved": False,
-        },
-    ]
+    return _ALERTS
+
+
+@router.patch("/alerts/{alert_id}")
+def resolve_alert(alert_id: str, payload: AlertPatchRequest, _: object = Depends(get_current_user)):
+    alert = next((a for a in _ALERTS if a["id"] == str(alert_id)), None)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    alert["resolved"] = payload.resolved
+    return alert
