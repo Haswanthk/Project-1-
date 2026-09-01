@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enterprise-analytics-backend
+  labels:
+    app: enterprise-analytics-backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: enterprise-analytics-backend
+  template:
+    metadata:
+      labels:
+        app: enterprise-analytics-backend
+    spec:
+      containers:
+      - name: backend
+        image: enterprise-analytics-backend:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: url
+        resources:
+          limits:
+            cpu: "1000m"
+            memory: "1024Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enterprise-analytics-frontend
+  labels:
+    app: enterprise-analytics-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: enterprise-analytics-frontend
+  template:
+    metadata:
+      labels:
+        app: enterprise-analytics-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: enterprise-analytics-frontend:latest
+        ports:
+        - containerPort: 80

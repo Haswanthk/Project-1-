@@ -1,0 +1,17 @@
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+*.pyo
+.venv/
+venv/
+node_modules/
+dist/
+build/
+uploads/
+models/
+mlruns/
+.env
+frontend/.env
+backend/.env
+
