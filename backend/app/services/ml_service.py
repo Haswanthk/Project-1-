@@ -77,11 +77,29 @@ class MLService:
         if payload.target_column not in df.columns:
             raise ValueError(f"Target column '{payload.target_column}' not found in dataset")
 
-        # Use only the explicitly selected feature columns
-        feature_cols = payload.feature_columns or [c for c in df.columns if c != payload.target_column]
+        algo = (payload.algorithm_id or payload.algorithm or "random_forest").lower()
+
+        # Resolve feature columns
+        raw_features = payload.feature_columns or payload.features
+        if isinstance(raw_features, str):
+            feature_cols = [c.strip() for c in raw_features.split(",") if c.strip()]
+        elif isinstance(raw_features, list) and len(raw_features) > 0:
+            feature_cols = [str(c).strip() for c in raw_features if str(c).strip()]
+        else:
+            feature_cols = [c for c in df.columns if c != payload.target_column]
+
         missing = [c for c in feature_cols if c not in df.columns]
         if missing:
             raise ValueError(f"Feature columns not found: {missing}")
+
+        # Auto-detect problem type if not supplied
+        problem_type = (payload.problem_type or "").lower().strip()
+        if not problem_type:
+            target_series = df[payload.target_column].dropna()
+            if target_series.dtype == object or target_series.nunique() <= 10:
+                problem_type = "classification"
+            else:
+                problem_type = "regression"
 
         x_raw = df[feature_cols].copy()
         # Encode categorical features with one-hot encoding
@@ -90,7 +108,7 @@ class MLService:
 
         # For classification, encode string labels
         label_encoder = None
-        if payload.problem_type == "classification" and y.dtype == object:
+        if problem_type == "classification" and y.dtype == object:
             label_encoder = LabelEncoder()
             y = pd.Series(label_encoder.fit_transform(y), index=y.index)
 
@@ -100,7 +118,6 @@ class MLService:
 
         # Scale features for algorithms that benefit from it
         scaler = None
-        algo = payload.algorithm_id.lower()
         if algo in ("svm", "svc", "svr", "knn", "knn_classifier", "knn_regressor",
                      "logistic_regression"):
             scaler = StandardScaler()
@@ -108,69 +125,68 @@ class MLService:
             x_test = pd.DataFrame(scaler.transform(x_test), columns=x_test.columns, index=x_test.index)
 
         # Select model based on algorithm_id
-        model = self._build_model(payload.algorithm_id, payload.problem_type)
+        model = self._build_model(algo, problem_type)
 
-        # ── Hyperparameter tuning via GridSearchCV ────────────────────────
+        # ── Fit model & extract hyperparameters ───────────────────────────
         best_params: dict[str, Any] = {}
         if payload.hyperparameters:
-            # User-provided hyperparameters override
             model.set_params(**payload.hyperparameters)
             best_params = payload.hyperparameters
-        elif algo in _PARAM_GRIDS and _PARAM_GRIDS[algo]:
-            scoring = "accuracy" if payload.problem_type == "classification" else "r2"
-            grid = GridSearchCV(
-                model, _PARAM_GRIDS[algo],
-                cv=3, scoring=scoring, n_jobs=-1, error_score="raise",
-            )
-            grid.fit(x_train, y_train)
-            model = grid.best_estimator_
-            best_params = grid.best_params_
 
-        with mlflow.start_run(run_name=f"{payload.algorithm_id}-{payload.problem_type}"):
-            if not best_params:
-                model.fit(x_train, y_train)
-            predictions = model.predict(x_test)
+        model.fit(x_train, y_train)
+        if not best_params:
+            for param in ["n_estimators", "max_depth", "learning_rate", "C", "n_neighbors"]:
+                if hasattr(model, param):
+                    val = getattr(model, param)
+                    if val is not None:
+                        best_params[param] = val
 
-            # Build metrics dict
-            metrics: dict[str, Any] = {}
-            if payload.problem_type == "classification":
-                avg = "weighted" if len(set(y)) > 2 else "binary"
-                metrics["accuracy"] = float(accuracy_score(y_test, predictions))
-                metrics["precision"] = float(precision_score(y_test, predictions, average=avg, zero_division=0))
-                metrics["recall"] = float(recall_score(y_test, predictions, average=avg, zero_division=0))
-                metrics["f1"] = float(f1_score(y_test, predictions, average=avg, zero_division=0))
-                cm = confusion_matrix(y_test, predictions).tolist()
-                metrics["confusion_matrix"] = cm
-                if label_encoder is not None:
-                    metrics["class_labels"] = list(label_encoder.classes_)
-                # ROC AUC for binary classification
-                if len(set(y)) == 2 and hasattr(model, "predict_proba"):
-                    try:
-                        proba = model.predict_proba(x_test)[:, 1]
-                        metrics["roc_auc"] = float(roc_auc_score(y_test, proba))
-                    except Exception:
-                        pass
-            else:
-                mse = mean_squared_error(y_test, predictions)
-                metrics["rmse"] = float(np.sqrt(mse))
-                metrics["mse"] = float(mse)
-                metrics["mae"] = float(mean_absolute_error(y_test, predictions))
-                metrics["r2"] = float(r2_score(y_test, predictions))
+        predictions = model.predict(x_test)
 
-            for k, v in metrics.items():
-                if isinstance(v, float):
-                    mlflow.log_metric(k, v)
-            mlflow.log_param("problem_type", payload.problem_type)
-            mlflow.log_param("algorithm", payload.algorithm_id)
-            if best_params:
-                for pk, pv in best_params.items():
-                    mlflow.log_param(pk, pv)
-            mlflow.sklearn.log_model(model, artifact_path="model")
+        # Build metrics dict
+        metrics: dict[str, Any] = {}
+        if problem_type == "classification":
+            avg = "weighted" if len(set(y)) > 2 else "binary"
+            metrics["accuracy"] = float(accuracy_score(y_test, predictions))
+            metrics["precision"] = float(precision_score(y_test, predictions, average=avg, zero_division=0))
+            metrics["recall"] = float(recall_score(y_test, predictions, average=avg, zero_division=0))
+            metrics["f1"] = float(f1_score(y_test, predictions, average=avg, zero_division=0))
+            cm = confusion_matrix(y_test, predictions).tolist()
+            metrics["confusion_matrix"] = cm
+            if label_encoder is not None:
+                metrics["class_labels"] = list(label_encoder.classes_)
+            # ROC AUC for binary classification
+            if len(set(y)) == 2 and hasattr(model, "predict_proba"):
+                try:
+                    proba = model.predict_proba(x_test)[:, 1]
+                    metrics["roc_auc"] = float(roc_auc_score(y_test, proba))
+                except Exception:
+                    pass
+        else:
+            mse = mean_squared_error(y_test, predictions)
+            metrics["rmse"] = float(np.sqrt(mse))
+            metrics["mse"] = float(mse)
+            metrics["mae"] = float(mean_absolute_error(y_test, predictions))
+            metrics["r2"] = float(r2_score(y_test, predictions))
+
+        try:
+            with mlflow.start_run(run_name=f"{algo}-{problem_type}"):
+                for k, v in metrics.items():
+                    if isinstance(v, float):
+                        mlflow.log_metric(k, v)
+                mlflow.log_param("problem_type", problem_type)
+                mlflow.log_param("algorithm", algo)
+                if best_params:
+                    for pk, pv in best_params.items():
+                        mlflow.log_param(pk, pv)
+                mlflow.sklearn.log_model(model, artifact_path="model")
+        except Exception:
+            pass
 
         # Real cross-validation
         cv_scores: list[float] = []
         if payload.cross_validation:
-            cv_metric = "accuracy" if payload.problem_type == "classification" else "r2"
+            cv_metric = "accuracy" if problem_type == "classification" else "r2"
             # If scaler was used, scale all data for CV
             if scaler is not None:
                 x_scaled = pd.DataFrame(scaler.fit_transform(x), columns=x.columns, index=x.index)
@@ -179,14 +195,16 @@ class MLService:
                 cv_results = cross_val_score(model, x, y, cv=5, scoring=cv_metric)
             cv_scores = [float(s) for s in cv_results]
 
-        model_name = f"{payload.algorithm_id}_{payload.dataset_id}.pkl"
+        raw_name = payload.model_name or f"{algo}_{payload.dataset_id}"
+        clean_name = raw_name.replace(".pkl", "").strip()
+        model_name = f"{clean_name}.pkl"
         with open(self.model_dir / model_name, "wb") as file:
             pickle.dump({
                 "model": model,
                 "features": list(x.columns),
-                "problem_type": payload.problem_type,
+                "problem_type": problem_type,
                 "target_column": payload.target_column,
-                "algorithm_id": payload.algorithm_id,
+                "algorithm_id": algo,
                 "metrics": metrics,
                 "label_encoder": label_encoder,
                 "scaler": scaler,
@@ -196,13 +214,34 @@ class MLService:
                 "feature_columns_original": feature_cols,
             }, file)
 
+        # Feature importances
+        feature_importance: dict[str, float] = {}
+        importances = getattr(model, "feature_importances_", None)
+        if importances is not None:
+            feature_importance = {f: round(float(i), 4) for f, i in zip(x.columns, importances)}
+        elif hasattr(model, "coef_"):
+            coefs = np.abs(model.coef_).flatten()
+            if len(coefs) == len(x.columns):
+                feature_importance = {f: round(float(c), 4) for f, c in zip(x.columns, coefs)}
+
         return {
+            "model_id": model_name,
+            "model_name": model_name,
             "modelId": model_name,
             "modelName": model_name,
             "metrics": metrics,
+            "feature_importance": feature_importance,
+            "features_used": list(x.columns),
             "featuresUsed": list(x.columns),
+            "cv_scores": cv_scores,
             "cvScores": cv_scores,
+            "best_params": best_params,
             "bestParams": best_params,
+            "training_samples": len(x_train),
+            "test_samples": len(x_test),
+            "problem_type": problem_type,
+            "algorithm": algo,
+            "target_column": payload.target_column,
         }
 
     def predict(self, model_name: str, features: dict[str, float]) -> dict[str, Any]:

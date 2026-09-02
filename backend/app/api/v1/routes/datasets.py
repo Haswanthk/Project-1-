@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import pandas as pd
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
@@ -70,6 +71,39 @@ def get_pca(dataset_id: int, db: Session = Depends(get_db), _: object = Depends(
     return profiling_service.compute_pca(frame)
 
 
+@router.get("/{dataset_id}/columns")
+def get_dataset_columns(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(get_current_user),
+):
+    dataset = DatasetRepository(db).get_by_id(dataset_id)
+    if not dataset or not dataset.file_path or not Path(dataset.file_path).exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset file not found")
+    frame = profiling_service.load_dataset(dataset.file_path)
+    columns_info = []
+    for col in frame.columns:
+        is_numeric = bool(pd.api.types.is_numeric_dtype(frame[col]))
+        unique_cnt = int(frame[col].nunique())
+        non_null_samples = [str(v) for v in frame[col].dropna().unique()[:3]]
+        columns_info.append({
+            "name": str(col),
+            "dtype": str(frame[col].dtype),
+            "is_numeric": is_numeric,
+            "unique_values": unique_cnt,
+            "sample_values": non_null_samples,
+        })
+    return {
+        "dataset_id": dataset_id,
+        "name": dataset.name,
+        "filename": dataset.name,
+        "column_names": [str(c) for c in frame.columns],
+        "columns": columns_info,
+        "row_count": len(frame),
+        "column_count": len(frame.columns),
+    }
+
+
 @router.get("/{dataset_id}/preview")
 def preview_dataset(
     dataset_id: int,
@@ -84,7 +118,17 @@ def preview_dataset(
     frame = profiling_service.load_dataset(dataset.file_path)
     start = (page - 1) * limit
     values = frame.iloc[start : start + limit].where(frame.notna(), None).values.tolist()
-    return {"headers": [str(column) for column in frame.columns], "rows": values, "total": len(frame)}
+    cols = [str(column) for column in frame.columns]
+    return {
+        "headers": cols,
+        "columns": cols,
+        "rows": values,
+        "total": len(frame),
+        "row_count": len(frame),
+        "column_count": len(cols),
+        "page": page,
+        "limit": limit,
+    }
 
 
 @router.get("/{dataset_id}/download")

@@ -19,7 +19,7 @@ def train_model(payload: TrainRequest, db: Session = Depends(get_db), _: object 
 @router.post("/predict")
 def predict(payload: PredictionRequest, db: Session = Depends(get_db), _: object = Depends(get_current_user)):
     try:
-        return MLService(db).predict(payload.model_name, payload.features)
+        return MLService(db).predict(payload.model_name, payload.get_features())
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail="Model not found") from error
 
@@ -28,7 +28,7 @@ def predict(payload: PredictionRequest, db: Session = Depends(get_db), _: object
 def batch_predict(payload: BatchPredictionRequest, db: Session = Depends(get_db), _: object = Depends(get_current_user)):
     """Predict on multiple rows at once."""
     try:
-        return MLService(db).batch_predict(payload.model_name, payload.rows)
+        return MLService(db).batch_predict(payload.model_name, payload.get_rows())
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail="Model not found") from error
 

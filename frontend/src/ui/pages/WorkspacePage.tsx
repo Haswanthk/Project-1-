@@ -43,10 +43,10 @@ export function WorkspacePage() {
               <tbody>
                 {filtered.map((d: any) => (
                   <tr key={d.id}>
-                    <td className="font-medium">{d.filename || d.name}</td>
-                    <td><StatusBadge label={d.rows?.toLocaleString() || '—'} variant="info" /></td>
-                    <td>{d.columns || '—'}</td>
-                    <td className="text-[var(--c-text-secondary)]">{d.file_size ? `${(d.file_size / 1024).toFixed(1)} KB` : '—'}</td>
+                    <td className="font-medium">{d.name || d.filename}</td>
+                    <td><StatusBadge label={String((d.row_count ?? d.rows)?.toLocaleString() || '—')} variant="info" /></td>
+                    <td>{d.column_count ?? d.columns ?? '—'}</td>
+                    <td className="text-[var(--c-text-secondary)]">{(d.file_size_bytes ?? d.file_size) ? `${((d.file_size_bytes ?? d.file_size) / 1024).toFixed(1)} KB` : '—'}</td>
                     <td className="text-xs text-[var(--c-text-muted)]">{d.created_at ? new Date(d.created_at).toLocaleDateString() : '—'}</td>
                     <td>
                       <div className="flex gap-1">
@@ -67,13 +67,18 @@ export function WorkspacePage() {
       {preview && (
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold">Data Preview</h3>
+            <div className="flex items-center gap-3">
+              <h3 className="text-sm font-semibold">Data Preview</h3>
+              <span className="text-xs text-[var(--c-text-muted)]">
+                ({preview.total || preview.row_count || preview.rows?.length || 0} rows, {(preview.columns || preview.headers)?.length || 0} columns)
+              </span>
+            </div>
             <button onClick={() => setPreview(null)} className="btn btn-ghost btn-sm">Close</button>
           </div>
           <div className="overflow-x-auto max-h-[400px]">
-            {preview.columns && preview.rows ? (
+            {(preview.columns || preview.headers) && preview.rows ? (
               <table className="data-table">
-                <thead><tr>{preview.columns.map((c: string) => <th key={c}>{c}</th>)}</tr></thead>
+                <thead><tr>{(preview.columns || preview.headers).map((c: string) => <th key={c}>{c}</th>)}</tr></thead>
                 <tbody>{preview.rows.map((row: any[], i: number) => <tr key={i}>{row.map((v: any, j: number) => <td key={j}>{String(v ?? '')}</td>)}</tr>)}</tbody>
               </table>
             ) : <pre className="text-xs text-[var(--c-text-secondary)] whitespace-pre-wrap">{JSON.stringify(preview, null, 2)}</pre>}

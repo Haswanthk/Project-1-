@@ -102,16 +102,18 @@ export function DatasetUploadPage() {
               <p className="text-sm text-[var(--c-text-secondary)]">Dataset processed and ready for analysis</p>
             </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {[
               { label: 'Dataset ID', value: result.id },
-              { label: 'File Name', value: result.filename },
-              { label: 'Rows', value: result.rows?.toLocaleString() },
-              { label: 'Columns', value: result.columns },
+              { label: 'File Name', value: result.name || result.filename },
+              { label: 'Total Rows', value: (result.row_count ?? result.rows)?.toLocaleString() },
+              { label: 'Columns', value: result.column_count ?? result.columns },
+              { label: 'File Size', value: formatSize(result.file_size_bytes ?? result.file_size ?? 0) },
+              { label: 'Duplicates', value: (result.duplicate_rows ?? 0).toLocaleString() },
             ].map(item => (
               <div key={item.label} className="p-3 rounded-xl bg-[var(--c-bg-secondary)] border border-[var(--c-border)]">
                 <p className="text-xs text-[var(--c-text-muted)] mb-1">{item.label}</p>
-                <p className="text-sm font-semibold">{item.value ?? '—'}</p>
+                <p className="text-sm font-semibold truncate" title={String(item.value ?? '')}>{item.value ?? '—'}</p>
               </div>
             ))}
           </div>

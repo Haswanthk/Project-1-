@@ -60,8 +60,8 @@ export function DataProfilingPage() {
               <motion.button key={d.id} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
                 onClick={() => runProfile(d.id)}
                 className={`p-4 rounded-xl border text-left transition-all ${selectedId === d.id ? 'border-indigo-500/30 bg-indigo-500/8' : 'border-[var(--c-border)] hover:border-[var(--c-border-strong)]'}`}>
-                <p className="text-sm font-semibold">{d.filename || d.name}</p>
-                <p className="text-xs text-[var(--c-text-muted)]">{d.rows} rows · {d.columns} cols</p>
+                <p className="text-sm font-semibold">{d.name || d.filename}</p>
+                <p className="text-xs text-[var(--c-text-muted)]">{(d.row_count ?? d.rows)?.toLocaleString() ?? '?'} rows · {(d.column_count ?? d.columns) ?? '?'} cols</p>
               </motion.button>
             ))}
           </div>

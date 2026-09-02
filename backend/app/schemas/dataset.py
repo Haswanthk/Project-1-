@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 class DatasetRead(BaseModel):
@@ -18,6 +18,22 @@ class DatasetRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @computed_field
+    def rows(self) -> int:
+        return self.row_count
+
+    @computed_field
+    def columns(self) -> int:
+        return self.column_count
+
+    @computed_field
+    def filename(self) -> str:
+        return self.name
+
+    @computed_field
+    def file_size(self) -> int:
+        return self.file_size_bytes
 
 
 class ProfileResponse(BaseModel):
