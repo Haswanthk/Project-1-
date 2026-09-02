@@ -43,6 +43,10 @@ class ProfilingService:
             },
             "correlation_matrix": correlations.to_dict(),
         }
+
+        distribution = self._distribution_analysis(numeric)
+        data_quality = self._data_quality_score(frame, outliers)
+
         return {
             "schema": {column: str(dtype) for column, dtype in frame.dtypes.items()},
             "statistics": json.loads(frame.describe(include="all").fillna("").to_json()),
@@ -53,6 +57,72 @@ class ProfilingService:
             "outliers": outliers,
             "class_imbalance": class_imbalance,
             "chart_payload": chart_payload,
+            "distribution_analysis": distribution,
+            "data_quality": data_quality,
+        }
+
+    def _distribution_analysis(self, numeric: pd.DataFrame) -> dict[str, Any]:
+        """Compute skewness and kurtosis for each numeric column."""
+        result: dict[str, Any] = {}
+        for col in numeric.columns:
+            series = numeric[col].dropna()
+            if len(series) < 3:
+                continue
+            skew_val = float(series.skew())
+            kurt_val = float(series.kurtosis())
+            # Classify distribution shape
+            if abs(skew_val) < 0.5:
+                skew_label = "approximately symmetric"
+            elif skew_val > 0:
+                skew_label = "right-skewed (positive)"
+            else:
+                skew_label = "left-skewed (negative)"
+
+            if kurt_val > 1:
+                kurt_label = "leptokurtic (heavy tails)"
+            elif kurt_val < -1:
+                kurt_label = "platykurtic (light tails)"
+            else:
+                kurt_label = "mesokurtic (normal-like)"
+
+            result[col] = {
+                "skewness": round(skew_val, 4),
+                "skewness_label": skew_label,
+                "kurtosis": round(kurt_val, 4),
+                "kurtosis_label": kurt_label,
+                "range": float(series.max() - series.min()),
+                "iqr": float(series.quantile(0.75) - series.quantile(0.25)),
+                "coefficient_of_variation": round(float(series.std() / series.mean()), 4) if series.mean() != 0 else 0.0,
+            }
+        return result
+
+    def _data_quality_score(self, frame: pd.DataFrame, outliers: dict[str, int]) -> dict[str, Any]:
+        """Compute a data quality score across completeness, uniqueness, consistency."""
+        total_cells = len(frame) * len(frame.columns) if len(frame.columns) > 0 else 1
+        total_missing = int(frame.isna().sum().sum())
+        completeness = max(0, round((1 - total_missing / total_cells) * 100, 1))
+
+        duplicates = int(frame.duplicated().sum())
+        uniqueness = max(0, round((1 - duplicates / max(len(frame), 1)) * 100, 1))
+
+        total_outliers = sum(outliers.values())
+        consistency = max(0, round((1 - total_outliers / max(total_cells, 1)) * 100, 1))
+
+        overall = round(completeness * 0.4 + uniqueness * 0.3 + consistency * 0.3, 1)
+
+        return {
+            "overall_score": min(100, overall),
+            "dimensions": {
+                "completeness": completeness,
+                "uniqueness": uniqueness,
+                "consistency": consistency,
+            },
+            "details": {
+                "total_cells": total_cells,
+                "total_missing": total_missing,
+                "total_duplicates": duplicates,
+                "total_outliers": total_outliers,
+            },
         }
 
     def compute_pca(self, frame: pd.DataFrame, n_components: int = 2) -> dict[str, Any]:
@@ -74,5 +144,3 @@ class ProfilingService:
             "explained_variance": [float(v) for v in pca.explained_variance_ratio_],
             "columns": list(numeric.columns),
         }
-
-

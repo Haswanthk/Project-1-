@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.realtime.ws_manager import ws_manager
+import app.models  # noqa: F401 – registers all ORM models with Base.metadata
 
 
 @asynccontextmanager

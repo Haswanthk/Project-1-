@@ -1,9 +1,10 @@
 import { useState } from 'react'
+import { motion } from 'framer-motion'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import { Link, useNavigate } from 'react-router-dom'
 import { z } from 'zod'
-import { AlertCircle, ShieldCheck } from 'lucide-react'
+import { AlertCircle, Sparkles, ArrowRight, Eye, EyeOff } from 'lucide-react'
 import { apiClient } from '../lib/api'
 import { useAuthStore } from '../state/authStore'
 
@@ -16,7 +17,9 @@ type FormValues = z.infer<typeof schema>
 export function LoginPage() {
   const navigate = useNavigate()
   const setTokens = useAuthStore((state) => state.setTokens)
+  const setUser = useAuthStore((state) => state.setUser)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [showPassword, setShowPassword] = useState(false)
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<FormValues>({
     resolver: zodResolver(schema),
   })
@@ -29,78 +32,125 @@ export function LoginPage() {
         password: values.password,
       })
       setTokens(data.access_token, data.refresh_token)
+      try {
+        const meRes = await apiClient.get('/users/me', {
+          headers: { Authorization: `Bearer ${data.access_token}` },
+        })
+        setUser(meRes.data)
+      } catch { /* navigate anyway */ }
       navigate('/dashboard')
     } catch (err: any) {
       if (err.response?.status === 401) {
-        setErrorMsg('Invalid email or password. Please check your credentials or create an account.')
+        setErrorMsg('Invalid email or password. Please check your credentials.')
       } else if (err.response?.data?.detail) {
         setErrorMsg(err.response.data.detail)
       } else {
-        setErrorMsg('Failed to connect to authentication service. Please ensure backend is running.')
+        setErrorMsg('Failed to connect. Please ensure the backend is running.')
       }
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-6 bg-slate-950 text-slate-100">
-      <div className="w-full max-w-md space-y-4">
-        <form onSubmit={handleSubmit(onSubmit)} className="rounded-2xl border border-white/10 bg-slate-900/60 p-6 backdrop-blur-xl shadow-2xl space-y-4">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="p-2 rounded-xl bg-violet-600/30 border border-violet-500/40 text-violet-300">
-              <ShieldCheck className="size-6" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-white">Enterprise AI Platform</h1>
-              <p className="text-xs text-slate-400">Sign in to your workspace</p>
-            </div>
-          </div>
+    <div className="relative flex min-h-screen items-center justify-center p-6 overflow-hidden">
+      {/* Animated background orbs */}
+      <div className="absolute inset-0 -z-10">
+        <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] rounded-full bg-indigo-600/[0.07] blur-[100px] animate-float" />
+        <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] rounded-full bg-violet-600/[0.06] blur-[80px] animate-float" style={{ animationDelay: '1.5s' }} />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full bg-blue-600/[0.04] blur-[120px] animate-pulse-glow" />
+      </div>
 
+      <motion.div
+        initial={{ opacity: 0, y: 30, scale: 0.95 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] }}
+        className="w-full max-w-md"
+      >
+        {/* Brand header */}
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2, duration: 0.5 }}
+          className="text-center mb-8"
+        >
+          <div className="inline-flex p-3.5 rounded-2xl bg-gradient-to-br from-indigo-600/25 to-violet-600/15 border border-indigo-500/20 text-indigo-400 mb-4">
+            <Sparkles className="size-8" />
+          </div>
+          <h1 className="text-3xl font-bold text-white tracking-tight">Welcome back</h1>
+          <p className="text-sm text-slate-400 mt-2">Sign in to your Enterprise AI workspace</p>
+        </motion.div>
+
+        <form onSubmit={handleSubmit(onSubmit)} className="glass-card p-7 space-y-5">
           {errorMsg && (
-            <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-medium">
-              <AlertCircle className="size-4 shrink-0 mt-0.5" />
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-start gap-3 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-sm"
+            >
+              <AlertCircle className="size-5 shrink-0 mt-0.5" />
               <span>{errorMsg}</span>
-            </div>
+            </motion.div>
           )}
 
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">Email Address</label>
-              <input
-                {...register('email')}
-                placeholder="admin@enterprise.ai"
-                className="w-full rounded-xl border border-white/10 bg-slate-950/80 px-4 py-2.5 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-violet-400"
-              />
-              {errors.email && <p className="mt-1 text-xs text-rose-400">{errors.email.message}</p>}
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">Password</label>
-              <input
-                {...register('password')}
-                type="password"
-                placeholder="••••••••"
-                className="w-full rounded-xl border border-white/10 bg-slate-950/80 px-4 py-2.5 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-violet-400"
-              />
-              {errors.password && <p className="mt-1 text-xs text-rose-400">{errors.password.message}</p>}
-            </div>
-
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full rounded-xl bg-violet-600 hover:bg-violet-500 py-3 font-semibold text-sm text-white transition shadow-lg shadow-violet-950/50 disabled:opacity-50"
-            >
-              {isSubmitting ? 'Signing in...' : 'Sign in to Platform'}
-            </button>
+          <div>
+            <label className="form-label">Email Address</label>
+            <input
+              {...register('email')}
+              placeholder="admin@enterprise.ai"
+              className="form-input"
+              autoComplete="email"
+            />
+            {errors.email && <p className="mt-1.5 text-xs text-rose-400">{errors.email.message}</p>}
           </div>
 
-          <p className="pt-2 text-center text-xs text-slate-400">
+          <div>
+            <label className="form-label">Password</label>
+            <div className="relative">
+              <input
+                {...register('password')}
+                type={showPassword ? 'text' : 'password'}
+                placeholder="••••••••"
+                className="form-input pr-10"
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition"
+              >
+                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+            {errors.password && <p className="mt-1.5 text-xs text-rose-400">{errors.password.message}</p>}
+          </div>
+
+          <motion.button
+            type="submit"
+            disabled={isSubmitting}
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.98 }}
+            className="btn btn-primary w-full py-3.5 text-sm"
+          >
+            {isSubmitting ? (
+              <div className="flex items-center gap-2">
+                <div className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Signing in...
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                Sign in to Platform
+                <ArrowRight className="size-4" />
+              </div>
+            )}
+          </motion.button>
+
+          <p className="pt-1 text-center text-sm text-slate-400">
             Don't have an account?{' '}
-            <Link to="/register" className="font-semibold text-violet-400 hover:underline">
+            <Link to="/register" className="font-semibold text-indigo-400 hover:text-indigo-300 transition">
               Create one
             </Link>
           </p>
         </form>
-      </div>
+      </motion.div>
     </div>
   )
 }

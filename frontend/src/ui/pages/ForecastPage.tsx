@@ -1,408 +1,110 @@
-import { useState, useEffect } from 'react';
-import ReactECharts from 'echarts-for-react';
-import {
-  TrendingUp, RefreshCw, Brain, Info,
-} from 'lucide-react';
-import { apiClient } from '../lib/api';
-
-interface ForecastMetric {
-  key: string;
-  label: string;
-  unit: string;
-  algorithm: string;
-}
-
-interface ForecastData {
-  metric: string;
-  label: string;
-  unit: string;
-  algorithm: string;
-  model_performance: { mape: number; mae: number };
-  historical: { timestamps: string[]; values: number[] };
-  forecast: {
-    timestamps: string[];
-    values: number[];
-    lower_bound: number[];
-    upper_bound: number[];
-  };
-  summary: {
-    direction: string;
-    horizon_days: number;
-    projected_change_pct: number;
-    confidence_level: number;
-  };
-}
-
-const HORIZONS = [
-  { label: '30 Days', value: 30 },
-  { label: '60 Days', value: 60 },
-  { label: '90 Days', value: 90 },
-];
-
-function fmt(n: number, unit: string) {
-  if (unit === '$') {
-    if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
-    if (n >= 1_000)     return `$${(n / 1_000).toFixed(1)}K`;
-    return `$${n.toFixed(2)}`;
-  }
-  if (unit === '%') return `${(n * 100).toFixed(2)}%`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`;
-  return n.toFixed(0);
-}
+import { useEffect, useState } from 'react'
+import { motion } from 'framer-motion'
+import ReactECharts from 'echarts-for-react'
+import { LineChart, Play, BarChart3 } from 'lucide-react'
+import { apiClient } from '../lib/api'
+import { PageHeader } from '../components/ui/PageHeader'
+import { ChartSkeleton } from '../components/ui/LoadingSkeleton'
 
 export function ForecastPage() {
-  const [datasets, setDatasets] = useState<any[]>([]);
-  const [selectedDatasetId, setSelectedDatasetId] = useState<string>('');
-  const [availableColumns, setAvailableColumns] = useState<string[]>([]);
-  const [targetColumn, setTargetColumn] = useState<string>('');
-  const [dateColumn, setDateColumn] = useState<string>('');
-  
-  const [horizon, setHorizon]   = useState<number>(30);
-  const [data, setData]         = useState<ForecastData | null>(null);
-  const [loading, setLoading]   = useState(false);
+  const [algorithms, setAlgorithms] = useState<any[]>([])
+  const [selectedAlgo, setSelectedAlgo] = useState('linear')
+  const [metric, setMetric] = useState('revenue')
+  const [periods, setPeriods] = useState(12)
+  const [result, setResult] = useState<any>(null)
+  const [loading, setLoading] = useState(false)
+  const [algoLoading, setAlgoLoading] = useState(true)
 
   useEffect(() => {
-    apiClient.get('/datasets/').then(res => setDatasets(res.data)).catch(console.error);
-  }, []);
+    apiClient.get('/forecast/algorithms').then(r => { setAlgorithms(r.data); setAlgoLoading(false) }).catch(() => setAlgoLoading(false))
+  }, [])
 
-  useEffect(() => {
-    if (selectedDatasetId) {
-      const d = datasets.find(x => x.id.toString() === selectedDatasetId);
-      if (d && d.schema_json) {
-        try {
-          const parsed = JSON.parse(d.schema_json);
-          setAvailableColumns(Object.keys(parsed));
-          setTargetColumn('');
-          setDateColumn('');
-        } catch (e) {
-          setAvailableColumns([]);
-        }
-      }
-    } else {
-      setAvailableColumns([]);
-      setTargetColumn('');
-      setDateColumn('');
-    }
-  }, [selectedDatasetId, datasets]);
-
-  const fetchForecast = async () => {
-    if (!selectedDatasetId || !targetColumn) return;
-    setLoading(true);
+  const runForecast = async () => {
+    setLoading(true)
     try {
-      const res = await apiClient.post(`/forecast/run`, {
-        dataset_id: parseInt(selectedDatasetId),
-        target_column: targetColumn,
-        date_column: dateColumn || null,
-        horizon: horizon
-      });
-      setData(res.data);
-    } catch (e) {
-      console.error('Forecast fetch failed', e);
-    } finally {
-      setLoading(false);
-    }
-  };
+      const r = await apiClient.post('/forecast/run', { metric, periods, algorithm: selectedAlgo })
+      setResult(r.data)
+    } catch {}
+    setLoading(false)
+  }
 
-  const buildChartOption = (d: ForecastData) => {
-    const histLen = d.historical?.timestamps?.length || 0;
-    const allTs   = [...(d.historical?.timestamps || []), ...(d.forecast?.timestamps || [])];
-    
-    // Pad historical with nulls for forecast positions and vice versa
-    const histSeries = [
-      ...(d.historical?.values || []),
-      ...Array(d.forecast?.timestamps?.length || 0).fill(null),
-    ];
-    
-    // Safety check: if no history, just use forecast directly
-    const fcValues = histLen > 0 ? [
-      ...Array(histLen - 1).fill(null),
-      d.historical.values[histLen - 1], // join point
-      ...(d.forecast?.values || []),
-    ] : [...(d.forecast?.values || [])];
-    
-    const fcLower = histLen > 0 ? [
-      ...Array(histLen - 1).fill(null),
-      d.historical.values[histLen - 1],
-      ...(d.forecast?.lower_bound || []),
-    ] : [...(d.forecast?.lower_bound || [])];
-    
-    const fcUpper = histLen > 0 ? [
-      ...Array(histLen - 1).fill(null),
-      d.historical.values[histLen - 1],
-      ...(d.forecast?.upper_bound || []),
-    ] : [...(d.forecast?.upper_bound || [])];
-
-    const labelFmt = (v: number) => fmt(v, d.unit);
-
-    return {
-      backgroundColor: 'transparent',
-      tooltip: {
-        trigger: 'axis',
-        formatter: (params: any[]) => {
-          const ts = params[0]?.name ?? '';
-          const lines = params
-            .filter(p => p.value != null)
-            .map(p => `${p.seriesName}: <b>${labelFmt(p.value)}</b>`)
-            .join('<br/>');
-          return `<span style="color:#94a3b8;font-size:11px">${ts}</span><br/>${lines}`;
-        },
-      },
-      legend: {
-        data: ['Historical', 'Forecast', 'Confidence Band'],
-        textStyle: { color: '#94a3b8', fontSize: 11 },
-        bottom: 0,
-      },
-      grid: { left: '3%', right: '3%', bottom: '14%', top: '5%', containLabel: true },
-      xAxis: {
-        type: 'category',
-        data: allTs,
-        axisLabel: {
-          color: '#64748b', fontSize: 10,
-          formatter: (v: string) => v.slice(5), // MM-DD
-          interval: Math.floor(allTs.length / 8),
-        },
-        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } },
-      },
-      yAxis: {
-        type: 'value',
-        axisLabel: { color: '#64748b', fontSize: 11, formatter: (v: number) => labelFmt(v) },
-        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
-      },
-      series: [
-        {
-          name: 'Historical',
-          type: 'line',
-          data: histSeries,
-          smooth: true,
-          symbol: 'none',
-          lineStyle: { color: '#6366f1', width: 2 },
-          itemStyle: { color: '#6366f1' },
-        },
-        {
-          name: 'Forecast',
-          type: 'line',
-          data: fcValues,
-          smooth: true,
-          symbol: 'none',
-          lineStyle: { color: '#f59e0b', width: 2.5, type: 'dashed' },
-          itemStyle: { color: '#f59e0b' },
-        },
-        // Upper confidence
-        {
-          name: 'Confidence Band',
-          type: 'line',
-          data: fcUpper,
-          smooth: true,
-          symbol: 'none',
-          lineStyle: { opacity: 0 },
-          itemStyle: { color: 'transparent' },
-          stack: 'confidence',
-          areaStyle: { opacity: 0 },
-          silent: true,
-          legendHoverLink: false,
-        },
-        {
-          name: 'Confidence Band',
-          type: 'line',
-          data: fcLower,
-          smooth: true,
-          symbol: 'none',
-          lineStyle: { opacity: 0 },
-          areaStyle: {
-            color: 'rgba(245,158,11,0.12)',
-          },
-          itemStyle: { color: 'rgba(245,158,11,0.5)' },
-          stack: 'confidence',
-        },
-      ],
-    };
-  };
-
-  const currentMetricCfg = metrics.find(m => m.key === metric);
-  const lastHistValue = data?.historical?.values?.length > 0 ? data.historical.values[data.historical.values.length - 1] : 0;
-  const lastFcValue = data?.forecast?.values?.length > 0 ? data.forecast.values[data.forecast.values.length - 1] : 0;
+  const forecastChart = result ? {
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis' as const, backgroundColor: '#0f172a', borderColor: '#1e293b', textStyle: { color: '#e2e8f0' } },
+    grid: { top: 20, bottom: 30, left: 50, right: 20 },
+    xAxis: { type: 'category' as const, data: [...(result.historical_dates || []), ...(result.forecast_dates || [])], axisLabel: { color: '#64748b', fontSize: 10 }, axisLine: { lineStyle: { color: '#1e293b' } } },
+    yAxis: { type: 'value' as const, axisLabel: { color: '#64748b', fontSize: 10 }, splitLine: { lineStyle: { color: '#1e293b' } } },
+    series: [
+      { name: 'Historical', data: [...(result.historical_values || []), ...Array(result.forecast_values?.length || 0).fill(null)], type: 'line' as const, smooth: true, symbol: 'none', lineStyle: { color: '#6366f1', width: 2.5 }, areaStyle: { color: { type: 'linear' as const, x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(99,102,241,0.2)' }, { offset: 1, color: 'rgba(99,102,241,0)' }] } } },
+      { name: 'Forecast', data: [...Array(result.historical_values?.length || 0).fill(null), ...(result.forecast_values || [])], type: 'line' as const, smooth: true, symbol: 'none', lineStyle: { color: '#f59e0b', width: 2.5, type: 'dashed' as const }, areaStyle: { color: { type: 'linear' as const, x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(245,158,11,0.15)' }, { offset: 1, color: 'rgba(245,158,11,0)' }] } } },
+      { name: 'Upper CI', data: [...Array(result.historical_values?.length || 0).fill(null), ...(result.confidence_upper || [])], type: 'line' as const, smooth: true, symbol: 'none', lineStyle: { opacity: 0 }, areaStyle: { opacity: 0 } },
+      { name: 'Lower CI', data: [...Array(result.historical_values?.length || 0).fill(null), ...(result.confidence_lower || [])], type: 'line' as const, smooth: true, symbol: 'none', lineStyle: { opacity: 0 }, areaStyle: { color: 'rgba(245,158,11,0.06)' } },
+    ],
+  } : null
 
   return (
-    <div className="p-6 space-y-6 animate-fade-in">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="section-title">Forecasting & Projections</h1>
-          <p className="section-subtitle">AI-driven time-series forecasting with confidence intervals</p>
-        </div>
-        <button onClick={fetchForecast} className="btn btn-secondary gap-2">
-          <RefreshCw className="w-4 h-4" /> Recalculate
-        </button>
-      </div>
+    <div className="p-6 space-y-7">
+      <PageHeader title="Forecasting" subtitle="Time-series forecasting with multiple algorithms" icon={<LineChart className="size-6" />} />
 
-      {/* Controls */}
-      <div className="glass-card p-5 flex flex-wrap gap-4 items-end">
-        <div className="flex-1 min-w-[200px]">
-          <p className="form-label mb-1">Target Dataset</p>
-          <select 
-            className="form-select w-full"
-            value={selectedDatasetId}
-            onChange={e => setSelectedDatasetId(e.target.value)}
-          >
-            <option value="">Select a dataset...</option>
-            {datasets.map(d => (
-              <option key={d.id} value={d.id}>{d.name}</option>
-            ))}
-          </select>
-        </div>
-        
-        <div className="flex-1 min-w-[150px]">
-          <p className="form-label mb-1">Target Column</p>
-          <select 
-            className="form-select w-full"
-            value={targetColumn}
-            onChange={e => setTargetColumn(e.target.value)}
-            disabled={!selectedDatasetId}
-          >
-            <option value="">Select target...</option>
-            {availableColumns.map(c => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex-1 min-w-[150px]">
-          <p className="form-label mb-1">Date Column (Optional)</p>
-          <select 
-            className="form-select w-full"
-            value={dateColumn}
-            onChange={e => setDateColumn(e.target.value)}
-            disabled={!selectedDatasetId}
-          >
-            <option value="">None (Use Index)</option>
-            {availableColumns.map(c => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Horizon selector */}
-        <div>
-          <p className="form-label mb-1">Horizon</p>
-          <div className="flex gap-2">
-            {HORIZONS.map(h => (
-              <button
-                key={h.value}
-                onClick={() => setHorizon(h.value)}
-                className={`px-3 py-2 rounded border text-sm font-medium transition-colors ${
-                  horizon === h.value
-                    ? 'bg-amber-600 border-amber-500 text-white'
-                    : 'border-[var(--c-border)] text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                {h.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        
-        <div>
-          <button 
-            className="btn btn-primary h-[38px] px-6"
-            disabled={loading || !selectedDatasetId || !targetColumn}
-            onClick={fetchForecast}
-          >
-            {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Run Forecast'}
-          </button>
-        </div>
-      </div>
-
-      {/* Summary cards */}
-      {data && !loading && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="stat-card p-5">
-            <p className="text-xs text-slate-400 mb-1">Current Value</p>
-            <p className="text-xl font-bold text-white">{fmt(lastHistValue, data.unit)}</p>
-            <p className="text-xs text-slate-500 mt-1">{data.label}</p>
-          </div>
-          <div className="stat-card p-5">
-            <p className="text-xs text-slate-400 mb-1">{data.summary.horizon_days}-Day Projection</p>
-            <p className="text-xl font-bold text-amber-400">{fmt(lastFcValue, data.unit)}</p>
-            <p className="text-xs text-emerald-400 mt-1">
-              {data.summary.projected_change_pct >= 0 ? '+' : ''}{data.summary.projected_change_pct.toFixed(1)}% change
-            </p>
-          </div>
-          <div className="stat-card p-5">
-            <p className="text-xs text-slate-400 mb-1">Model</p>
-            <p className="text-sm font-semibold text-white leading-tight">{data.algorithm}</p>
-            <p className="text-xs text-slate-500 mt-1">MAPE: {data.model_performance.mape}%</p>
-          </div>
-          <div className="stat-card p-5">
-            <p className="text-xs text-slate-400 mb-1">Confidence</p>
-            <p className="text-xl font-bold text-indigo-400">{data.summary.confidence_level}%</p>
-            <p className={`text-xs mt-1 font-medium ${data.summary.direction === 'upward' ? 'text-emerald-400' : 'text-red-400'}`}>
-              {data.summary.direction === 'upward' ? '↑' : '↓'} {data.summary.direction} trend
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Chart */}
-      <div className="glass-card p-6">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="p-2 rounded-xl bg-amber-500/15">
-            <TrendingUp className="w-5 h-5 text-amber-400" />
+      {/* Config Panel */}
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6">
+        <h3 className="text-sm font-semibold mb-4">Forecast Configuration</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <label className="form-label">Metric</label>
+            <select value={metric} onChange={e => setMetric(e.target.value)} className="form-select">
+              <option value="revenue">Revenue</option>
+              <option value="users">Active Users</option>
+              <option value="orders">Orders</option>
+              <option value="churn">Churn Rate</option>
+            </select>
           </div>
           <div>
-            <h3 className="section-header">{data?.label ?? 'Forecast'} — {horizon}-Day Projection</h3>
-            <p className="text-xs text-slate-500">
-              <span className="inline-block w-4 h-0.5 bg-indigo-500 mr-1 align-middle" />Historical &nbsp;
-              <span className="inline-block w-4 h-0.5 bg-amber-400 mr-1 align-middle border-dashed" />Forecast &nbsp;
-              <span className="inline-block w-4 h-2 bg-amber-500/20 rounded mr-1 align-middle" />95% CI
-            </p>
+            <label className="form-label">Algorithm</label>
+            <select value={selectedAlgo} onChange={e => setSelectedAlgo(e.target.value)} className="form-select">
+              {algoLoading ? <option>Loading...</option> : algorithms.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="form-label">Forecast Periods</label>
+            <input type="number" value={periods} onChange={e => setPeriods(+e.target.value)} min={1} max={52} className="form-input" />
+          </div>
+          <div className="flex items-end">
+            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={runForecast} disabled={loading} className="btn btn-primary w-full">
+              {loading ? <div className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Play className="size-4" />}
+              {loading ? 'Running...' : 'Run Forecast'}
+            </motion.button>
           </div>
         </div>
-        {loading ? (
-          <div className="skeleton h-80 rounded-xl" />
-        ) : data ? (
-          <ReactECharts option={buildChartOption(data)} style={{ height: '360px' }} />
-        ) : null}
-      </div>
+      </motion.div>
 
-      {/* Model Info */}
-      {data && !loading && (
-        <div className="glass-card p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <Brain className="w-5 h-5 text-indigo-400" />
-            <h3 className="section-header">Model Information</h3>
+      {/* Algorithms */}
+      {!algoLoading && algorithms.length > 0 && (
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {algorithms.map((a: any) => (
+            <div key={a.id} onClick={() => setSelectedAlgo(a.id)}
+              className={`p-4 rounded-xl border cursor-pointer transition-all ${selectedAlgo === a.id ? 'border-indigo-500/30 bg-indigo-500/8 shadow-sm shadow-indigo-500/10' : 'border-[var(--c-border)] bg-[var(--c-bg-elevated)] hover:border-[var(--c-border-strong)]'}`}>
+              <div className="flex items-center gap-2 mb-2"><BarChart3 className="size-4 text-indigo-400" /><span className="text-sm font-semibold">{a.name}</span></div>
+              <p className="text-xs text-[var(--c-text-secondary)]">{a.description}</p>
+            </div>
+          ))}
+        </motion.div>
+      )}
+
+      {/* Result Chart */}
+      {result && (
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold">Forecast Results</h3>
+            <div className="flex items-center gap-3 text-xs text-[var(--c-text-secondary)]">
+              {result.metrics && Object.entries(result.metrics).map(([k, v]) => (
+                <span key={k} className="px-2 py-1 rounded-lg bg-[var(--c-bg-secondary)]">{k}: <strong>{typeof v === 'number' ? v.toFixed(3) : String(v)}</strong></span>
+              ))}
+            </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-            <div>
-              <p className="text-slate-500 text-xs mb-1">Algorithm</p>
-              <p className="font-semibold text-white">{data.algorithm}</p>
-            </div>
-            <div>
-              <p className="text-slate-500 text-xs mb-1">MAPE</p>
-              <p className="font-semibold text-white">{data.model_performance.mape}%</p>
-            </div>
-            <div>
-              <p className="text-slate-500 text-xs mb-1">MAE</p>
-              <p className="font-semibold text-white">{fmt(data.model_performance.mae, data.unit)}</p>
-            </div>
-            <div>
-              <p className="text-slate-500 text-xs mb-1">Confidence Level</p>
-              <p className="font-semibold text-white">{data.summary.confidence_level}%</p>
-            </div>
-          </div>
-          <div className="mt-5 p-4 rounded-xl bg-amber-500/5 border border-amber-500/15 flex gap-3">
-            <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Forecast generated using <strong className="text-white">{data.algorithm}</strong> on 30 days of historical data.
-              The <strong className="text-white">95% confidence interval</strong> widens over the horizon as uncertainty compounds.
-              Model accuracy: <strong className="text-white">MAPE = {data.model_performance.mape}%</strong>.
-              {data.summary.direction === 'upward'
-                ? ` Positive trend detected — projected ${data.summary.projected_change_pct.toFixed(1)}% growth over ${data.summary.horizon_days} days.`
-                : ` Declining trend detected — monitor closely for intervention opportunities.`}
-            </p>
-          </div>
-        </div>
+          {forecastChart ? <ReactECharts option={forecastChart} style={{ height: 400 }} /> : <ChartSkeleton height="400px" />}
+        </motion.div>
       )}
     </div>
-  );
+  )
 }

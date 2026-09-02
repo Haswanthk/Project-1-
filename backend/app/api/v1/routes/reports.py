@@ -121,7 +121,9 @@ def download_report(report_id: int, db: Session = Depends(get_db), _: object = D
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "excel": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "csv": "text/csv"
+        "csv": "text/csv",
+        "html": "text/html",
+        "json": "application/json",
     }
     
     return FileResponse(
@@ -129,3 +131,38 @@ def download_report(report_id: int, db: Session = Depends(get_db), _: object = D
         media_type=mime_types.get(report.format, "application/octet-stream"),
         filename=f"{report.title}.{report.format.replace('excel', 'xlsx')}"
     )
+
+
+@router.get("/{report_id}")
+def get_report(report_id: int, db: Session = Depends(get_db), _: object = Depends(get_current_user)):
+    """Get details for a single report."""
+    report = db.get(Report, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return {
+        "id": report.id,
+        "title": report.title,
+        "format": report.format,
+        "status": report.status,
+        "created_at": report.created_at.isoformat(),
+        "download_url": f"/api/v1/reports/{report.id}/download",
+        "file_path": report.file_path,
+    }
+
+
+@router.delete("/{report_id}")
+def delete_report(report_id: int, db: Session = Depends(get_db), _: object = Depends(get_current_user)):
+    """Delete a report."""
+    report = db.get(Report, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    # Delete file from disk
+    if report.file_path:
+        from pathlib import Path
+        p = Path(report.file_path)
+        if p.exists():
+            p.unlink()
+    db.delete(report)
+    db.commit()
+    return {"status": "deleted", "report_id": report_id}
+

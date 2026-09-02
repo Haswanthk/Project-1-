@@ -2,7 +2,8 @@ from fastapi import APIRouter
 
 from app.api.v1.routes import (
     admin, ai, analytics, anomaly, auth, connectors, datasets, forecast,
-    ml, monitoring, notifications, projects, rag, reports, sources, spark, users, ws,
+    ml, monitoring, notifications, projects, rag, reports, sources, spark,
+    streaming, users, ws,
 )
 
 api_router = APIRouter()
@@ -22,5 +23,6 @@ api_router.include_router(monitoring.router,    prefix="/monitoring",   tags=["m
 api_router.include_router(ws.router,            prefix="/realtime",     tags=["realtime"])
 api_router.include_router(reports.router,       prefix="/reports",      tags=["reports"])
 api_router.include_router(spark.router,         prefix="/spark",        tags=["spark"])
+api_router.include_router(streaming.router,     prefix="/streaming",    tags=["streaming"])
 api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 api_router.include_router(admin.router,         prefix="/admin",        tags=["admin"])

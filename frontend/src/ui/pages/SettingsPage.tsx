@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Palette, Key, Server, Save, RotateCcw, AlertTriangle, Eye, EyeOff, LogOut } from 'lucide-react';
+import { Palette, Key, Server, Save, AlertTriangle, Eye, EyeOff, LogOut } from 'lucide-react';
 import { apiClient } from '../lib/api';
 import { useAuthStore } from '../state/authStore';
 import { useNavigate } from 'react-router-dom';

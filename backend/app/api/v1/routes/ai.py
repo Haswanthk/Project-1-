@@ -129,8 +129,20 @@ async def _stream_response(text: str):
 
 @router.post("/chat/stream")
 async def chat_stream(payload: ChatStreamRequest, _: object = Depends(get_current_user)):
-    """SSE streaming endpoint for the AI Analytics Copilot."""
-    response_text = _build_response(payload.content, payload.dataset_context)
+    """SSE streaming endpoint for the AI Analytics Copilot, using Gemini when active."""
+    response_text = None
+    if service._call_gemini:
+        system_instruction = (
+            "You are an enterprise AI analytics copilot. Ground your answers in enterprise analytics: "
+            "metrics, revenue, churn, anomalies, forecasts, SQL data pipelines, and ML models. "
+            "Be clear, professional, concise, and format data using markdown lists or tables when helpful."
+        )
+        ctx = f" (Context: {payload.dataset_context})" if payload.dataset_context else ""
+        response_text = service._call_gemini(f"{payload.content}{ctx}", system_prompt=system_instruction)
+
+    if not response_text:
+        response_text = _build_response(payload.content, payload.dataset_context)
+
     return StreamingResponse(
         _stream_response(response_text),
         media_type="text/event-stream",

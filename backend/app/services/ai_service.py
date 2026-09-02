@@ -25,9 +25,63 @@ class AIServiceLayer:
             ProviderState("LocalLlama", settings.enable_local_llama, bool(settings.local_llama_endpoint)),
         ]
 
+    def _call_gemini(self, prompt: str, system_prompt: str = "") -> str | None:
+        """Calls Google Gemini API using configured key and gemini-2.5-flash."""
+        if not (settings.enable_gemini and settings.gemini_api_key):
+            return None
+        try:
+            import httpx
+
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.gemini_api_key}"
+            payload: dict[str, Any] = {
+                "contents": [{"parts": [{"text": prompt}]}]
+            }
+            if system_prompt:
+                payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+
+            with httpx.Client(timeout=15.0) as client:
+                res = client.post(url, json=payload)
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if candidates and "content" in candidates[0]:
+                        parts = candidates[0]["content"].get("parts", [])
+                        if parts and "text" in parts[0]:
+                            return parts[0]["text"]
+        except Exception as e:
+            # Fallback on any connection error
+            pass
+        return None
+
     def execute_feature(self, feature: str, prompt: str = "", context: dict | None = None) -> dict[str, Any]:
         ready = any(provider.enabled and provider.configured for provider in self.providers())
         active_provider = next((p.name for p in self.providers() if p.enabled and p.configured), "Internal Analytics Engine")
+
+        # If Gemini is active, attempt real generation
+        if active_provider == "Gemini" and prompt:
+            feature_instructions = {
+                "chat_with_data": "You are an enterprise AI data analytics assistant. Ground your response in business KPIs, churn rates, revenue metrics, and data trends. Be concise, structured, and insightful.",
+                "natural_language_sql": "You are an expert SQL engineer. Given the user prompt, return a valid, optimized SQL query with clear comments.",
+                "business_insights": "You are a senior business intelligence strategist. Provide 3-5 executive-level strategic insights based on the prompt.",
+                "executive_summary": "You are an executive analytics briefer. Produce a bulleted high-level executive summary.",
+                "prediction_explanation": "You are an ML explainability specialist. Explain feature contributions and model confidence for this prediction.",
+                "automatic_report_generation": "You are an automated reporting engine. Produce a detailed executive analytics report with sections and key metrics.",
+                "data_storytelling": "You are a data storyteller. Craft a compelling narrative tracing trends, root causes, and outcomes.",
+                "forecast_explanation": "You are a time-series forecasting analyst. Explain the forecast trajectory, seasonality, and confidence intervals.",
+                "anomaly_explanation": "You are an anomaly detection specialist. Explain the severity, Z-score, potential root cause, and remediation steps.",
+            }
+            sys_inst = feature_instructions.get(feature, "You are an enterprise analytics copilot.")
+            real_text = self._call_gemini(f"Task: {feature}\nInput: {prompt}", system_prompt=sys_inst)
+            if real_text:
+                return {
+                    "feature": feature,
+                    "status": "ready",
+                    "provider": "Gemini (gemini-2.5-flash)",
+                    "provider_ready": True,
+                    "prompt": prompt,
+                    "response": real_text,
+                    "message": "Execution completed via Google Gemini.",
+                }
 
         responses = {
             "chat_with_data": f"Based on your query '{prompt or 'latest trends'}', the primary dataset indicates a +14.2% quarter-over-quarter growth across high-value customer segments, with key metric stability at 99.4%.",

@@ -1,305 +1,122 @@
-import { useState } from 'react'
-import { Upload, Database, Globe, Radio, CheckCircle, AlertCircle, HardDrive } from 'lucide-react'
-import { GlassCard } from '../components/ui/GlassCard'
+import { useState, useCallback } from 'react'
+import { motion } from 'framer-motion'
+import { Upload, FileText, AlertCircle, CheckCircle, X, CloudUpload } from 'lucide-react'
 import { apiClient } from '../lib/api'
+import { PageHeader } from '../components/ui/PageHeader'
 
 export function DatasetUploadPage() {
-  const [activeTab, setActiveTab] = useState<'file' | 'rest' | 'sql' | 'stream'>('file')
   const [file, setFile] = useState<File | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [dragActive, setDragActive] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  // REST state
-  const [restName, setRestName] = useState('')
-  const [restUrl, setRestUrl] = useState('')
+  const handleDrag = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); e.stopPropagation()
+    if (e.type === 'dragenter' || e.type === 'dragover') setDragActive(true)
+    else if (e.type === 'dragleave') setDragActive(false)
+  }, [])
 
-  // SQL state
-  const [sqlName, setSqlName] = useState('')
-  const [sqlConnection, setSqlConnection] = useState('')
-  const [sqlQuery, setSqlQuery] = useState('')
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); e.stopPropagation(); setDragActive(false)
+    const f = e.dataTransfer.files?.[0]
+    if (f) setFile(f)
+  }, [])
 
-  // Stream state
-  const [streamName, setStreamName] = useState('')
-  const [streamType, setStreamType] = useState('kafka')
-  const [streamEndpoint, setStreamEndpoint] = useState('')
-
-  const handleFileUpload = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleUpload = async () => {
     if (!file) return
-    setLoading(true)
-    setStatusMessage(null)
+    setUploading(true); setError(null); setResult(null)
     const formData = new FormData()
     formData.append('file', file)
     try {
-      const res = await apiClient.post('/datasets/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setStatusMessage({ type: 'success', text: `Dataset '${res.data.name}' uploaded & profiled successfully!` })
-      setFile(null)
+      const res = await apiClient.post('/datasets/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+      setResult(res.data)
     } catch (err: any) {
-      setStatusMessage({ type: 'error', text: err.response?.data?.detail || 'Upload failed' })
-    } finally {
-      setLoading(false)
+      setError(err.response?.data?.detail || 'Upload failed. Please try again.')
     }
+    setUploading(false)
   }
 
-  const handleRestIngest = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    setStatusMessage(null)
-    try {
-      await apiClient.post('/sources/rest', { name: restName, url: restUrl })
-      setStatusMessage({ type: 'success', text: `REST source '${restName}' ingested successfully!` })
-      setRestName('')
-      setRestUrl('')
-    } catch (err: any) {
-      setStatusMessage({ type: 'error', text: err.response?.data?.detail || 'REST Ingest failed' })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleSqlIngest = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    setStatusMessage(null)
-    try {
-      await apiClient.post('/sources/sql', { name: sqlName, connection_url: sqlConnection, query: sqlQuery })
-      setStatusMessage({ type: 'success', text: `SQL Query '${sqlName}' executed and ingested!` })
-      setSqlName('')
-      setSqlConnection('')
-      setSqlQuery('')
-    } catch (err: any) {
-      setStatusMessage({ type: 'error', text: err.response?.data?.detail || 'SQL Ingest failed' })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleStreamRegister = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    setStatusMessage(null)
-    try {
-      await apiClient.post('/sources/stream', { name: streamName, source_type: streamType, configuration: { endpoint: streamEndpoint } })
-      setStatusMessage({ type: 'success', text: `Stream '${streamName}' registered successfully!` })
-      setStreamName('')
-      setStreamEndpoint('')
-    } catch (err: any) {
-      setStatusMessage({ type: 'error', text: err.response?.data?.detail || 'Stream registration failed' })
-    } finally {
-      setLoading(false)
-    }
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-white">Dataset Ingestion & Connectors</h2>
-          <p className="text-sm text-slate-400">Import structured files, REST endpoints, SQL databases, or stream topics</p>
-        </div>
-      </div>
+    <div className="p-6 space-y-7">
+      <PageHeader title="Dataset Upload" subtitle="Upload CSV, Excel, or JSON datasets for analysis" icon={<Upload className="size-6" />} />
 
-      {statusMessage && (
+      {/* Drop Zone */}
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-8">
         <div
-          className={`flex items-center gap-3 rounded-xl p-4 border ${
-            statusMessage.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+          onDragEnter={handleDrag} onDragOver={handleDrag} onDragLeave={handleDrag} onDrop={handleDrop}
+          onClick={() => document.getElementById('file-input')?.click()}
+          className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all duration-300 ${
+            dragActive ? 'border-indigo-400 bg-indigo-500/8 scale-[1.01]' : 'border-[var(--c-border-strong)] hover:border-indigo-400/50 hover:bg-[var(--c-bg-hover)]'
           }`}
         >
-          {statusMessage.type === 'success' ? <CheckCircle className="size-5" /> : <AlertCircle className="size-5" />}
-          <span>{statusMessage.text}</span>
+          <input id="file-input" type="file" className="hidden" accept=".csv,.xlsx,.xls,.json"
+            onChange={e => { if (e.target.files?.[0]) setFile(e.target.files[0]) }}
+          />
+          <motion.div animate={dragActive ? { scale: 1.1, y: -8 } : { scale: 1, y: 0 }} transition={{ type: 'spring', stiffness: 300 }}>
+            <CloudUpload className={`size-12 mx-auto mb-4 ${dragActive ? 'text-indigo-400' : 'text-[var(--c-text-muted)]'}`} />
+          </motion.div>
+          <p className="text-lg font-semibold mb-1">Drop your dataset here</p>
+          <p className="text-sm text-[var(--c-text-secondary)]">or click to browse · CSV, Excel, JSON</p>
         </div>
+
+        {/* Selected file */}
+        {file && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-5 flex items-center justify-between p-4 rounded-xl bg-[var(--c-bg-secondary)] border border-[var(--c-border)]">
+            <div className="flex items-center gap-3">
+              <FileText className="size-5 text-indigo-400" />
+              <div>
+                <p className="text-sm font-medium">{file.name}</p>
+                <p className="text-xs text-[var(--c-text-muted)]">{formatSize(file.size)}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => { setFile(null); setResult(null) }} className="p-1.5 rounded-lg hover:bg-white/[0.06] text-slate-400 hover:text-white transition"><X className="size-4" /></button>
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleUpload} disabled={uploading} className="btn btn-primary btn-sm">
+                {uploading ? <><div className="size-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Uploading...</> : <><Upload className="size-3.5" /> Upload</>}
+              </motion.button>
+            </div>
+          </motion.div>
+        )}
+
+        {error && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-4 flex items-center gap-3 p-4 rounded-xl bg-rose-500/8 border border-rose-500/15 text-rose-400 text-sm">
+            <AlertCircle className="size-5 shrink-0" /> {error}
+          </motion.div>
+        )}
+      </motion.div>
+
+      {/* Upload Result */}
+      {result && (
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="glass-card p-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="p-2.5 rounded-xl bg-emerald-500/15 text-emerald-400"><CheckCircle className="size-6" /></div>
+            <div>
+              <h3 className="text-lg font-semibold">Upload Successful</h3>
+              <p className="text-sm text-[var(--c-text-secondary)]">Dataset processed and ready for analysis</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {[
+              { label: 'Dataset ID', value: result.id },
+              { label: 'File Name', value: result.filename },
+              { label: 'Rows', value: result.rows?.toLocaleString() },
+              { label: 'Columns', value: result.columns },
+            ].map(item => (
+              <div key={item.label} className="p-3 rounded-xl bg-[var(--c-bg-secondary)] border border-[var(--c-border)]">
+                <p className="text-xs text-[var(--c-text-muted)] mb-1">{item.label}</p>
+                <p className="text-sm font-semibold">{item.value ?? '—'}</p>
+              </div>
+            ))}
+          </div>
+        </motion.div>
       )}
-
-      {/* Tabs */}
-      <div className="flex gap-3 border-b border-white/10 pb-3">
-        <button
-          onClick={() => setActiveTab('file')}
-          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition ${
-            activeTab === 'file' ? 'bg-violet-600 text-white' : 'bg-slate-900/60 text-slate-400 hover:text-white'
-          }`}
-        >
-          <Upload className="size-4" /> File Upload
-        </button>
-        <button
-          onClick={() => setActiveTab('rest')}
-          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition ${
-            activeTab === 'rest' ? 'bg-violet-600 text-white' : 'bg-slate-900/60 text-slate-400 hover:text-white'
-          }`}
-        >
-          <Globe className="size-4" /> REST API
-        </button>
-        <button
-          onClick={() => setActiveTab('sql')}
-          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition ${
-            activeTab === 'sql' ? 'bg-violet-600 text-white' : 'bg-slate-900/60 text-slate-400 hover:text-white'
-          }`}
-        >
-          <Database className="size-4" /> SQL Connector
-        </button>
-        <button
-          onClick={() => setActiveTab('stream')}
-          className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition ${
-            activeTab === 'stream' ? 'bg-violet-600 text-white' : 'bg-slate-900/60 text-slate-400 hover:text-white'
-          }`}
-        >
-          <Radio className="size-4" /> Stream Topic
-        </button>
-      </div>
-
-      <GlassCard>
-        {activeTab === 'file' && (
-          <form onSubmit={handleFileUpload} className="space-y-4">
-            <div className="border-2 border-dashed border-white/20 rounded-2xl p-10 text-center hover:border-violet-400 transition cursor-pointer">
-              <HardDrive className="mx-auto size-12 text-violet-400 mb-3" />
-              <p className="text-lg font-semibold text-white">Drag and drop your file here, or click to browse</p>
-              <p className="text-sm text-slate-400 mt-1">Supports CSV, Excel (.xlsx/.xls), JSON datasets</p>
-              <input
-                type="file"
-                accept=".csv, .xlsx, .xls, .json"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="mt-4 block mx-auto text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-violet-600 file:text-white hover:file:bg-violet-500"
-              />
-            </div>
-            {file && (
-              <p className="text-sm text-emerald-400">Selected file: {file.name} ({Math.round(file.size / 1024)} KB)</p>
-            )}
-            <button
-              type="submit"
-              disabled={!file || loading}
-              className="w-full py-3 rounded-xl bg-violet-600 font-semibold text-white hover:bg-violet-500 disabled:opacity-50 transition"
-            >
-              {loading ? 'Uploading & Profiling...' : 'Upload & Automatic Profile'}
-            </button>
-          </form>
-        )}
-
-        {activeTab === 'rest' && (
-          <form onSubmit={handleRestIngest} className="space-y-4 max-w-xl">
-            <div>
-              <label className="block text-sm font-medium text-slate-300">Dataset Name</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g., Live Weather REST API"
-                value={restName}
-                onChange={(e) => setRestName(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-2.5 text-white focus:outline-none focus:border-violet-400"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300">Endpoint URL (JSON)</label>
-              <input
-                type="url"
-                required
-                placeholder="https://api.example.com/data.json"
-                value={restUrl}
-                onChange={(e) => setRestUrl(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-2.5 text-white focus:outline-none focus:border-violet-400"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 rounded-xl bg-violet-600 font-semibold text-white hover:bg-violet-500 transition"
-            >
-              {loading ? 'Ingesting REST Payload...' : 'Fetch & Ingest REST Endpoint'}
-            </button>
-          </form>
-        )}
-
-        {activeTab === 'sql' && (
-          <form onSubmit={handleSqlIngest} className="space-y-4 max-w-xl">
-            <div>
-              <label className="block text-sm font-medium text-slate-300">Dataset Alias</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g., PostgreSQL Sales Dump"
-                value={sqlName}
-                onChange={(e) => setSqlName(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-2.5 text-white focus:outline-none focus:border-violet-400"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300">SQL Connection URL</label>
-              <input
-                type="text"
-                required
-                placeholder="postgresql://user:password@localhost:5432/db"
-                value={sqlConnection}
-                onChange={(e) => setSqlConnection(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-2.5 text-white focus:outline-none focus:border-violet-400"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300">SQL Query</label>
-              <textarea
-                required
-                rows={3}
-                placeholder="SELECT * FROM transactions WHERE status = 'completed'"
-                value={sqlQuery}
-                onChange={(e) => setSqlQuery(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-2.5 text-white font-mono text-sm focus:outline-none focus:border-violet-400"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 rounded-xl bg-violet-600 font-semibold text-white hover:bg-violet-500 transition"
-            >
-              {loading ? 'Executing Query & Ingesting...' : 'Execute SQL Query & Import'}
-            </button>
-          </form>
-        )}
-
-        {activeTab === 'stream' && (
-          <form onSubmit={handleStreamRegister} className="space-y-4 max-w-xl">
-            <div>
-              <label className="block text-sm font-medium text-slate-300">Stream Name</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g., Telemetry Event Queue"
-                value={streamName}
-                onChange={(e) => setStreamName(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-2.5 text-white focus:outline-none focus:border-violet-400"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300">Source Type</label>
-              <select
-                value={streamType}
-                onChange={(e) => setStreamType(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-2.5 text-white focus:outline-none focus:border-violet-400"
-              >
-                <option value="kafka">Kafka Topic</option>
-                <option value="iot">IoT Sensor Broker</option>
-                <option value="web_logs">Web Socket Log Stream</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300">Broker Endpoint / Topic</label>
-              <input
-                type="text"
-                required
-                placeholder="localhost:9092/telemetry-topic"
-                value={streamEndpoint}
-                onChange={(e) => setStreamEndpoint(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-2.5 text-white focus:outline-none focus:border-violet-400"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 rounded-xl bg-violet-600 font-semibold text-white hover:bg-violet-500 transition"
-            >
-              {loading ? 'Registering Stream...' : 'Register Stream Connection'}
-            </button>
-          </form>
-        )}
-      </GlassCard>
     </div>
   )
 }

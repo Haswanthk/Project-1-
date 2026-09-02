@@ -1,118 +1,51 @@
 import { useEffect, useState } from 'react'
-import { ShieldCheck, Download, RefreshCw } from 'lucide-react'
-
-
-import { GlassCard } from '../components/ui/GlassCard'
+import { motion } from 'framer-motion'
+import { ShieldCheck, Brain, Clock } from 'lucide-react'
 import { apiClient } from '../lib/api'
+import { PageHeader } from '../components/ui/PageHeader'
+import { EmptyState } from '../components/ui/EmptyState'
+import { StatusBadge } from '../components/ui/StatusBadge'
 
-type ModelItem = {
-  model_name: string
-  algorithm: string
-  feature_count: number
-  problem_type: string
-  target_column: string
-  file_size: number
-  created_at: number
-}
+const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } } }
+const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4 } } }
 
 export function ModelRegistryPage() {
-  const [models, setModels] = useState<ModelItem[]>([])
+  const [models, setModels] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [deployments, setDeployments] = useState<Record<string, 'Staging' | 'Production'>>({})
 
-  const fetchModels = async () => {
-    try {
-      const res = await apiClient.get('/ml/models')
-      setModels(res.data)
-      const deps: Record<string, 'Staging' | 'Production'> = {}
-      res.data.forEach((m: ModelItem, idx: number) => {
-        deps[m.model_name] = idx === 0 ? 'Production' : 'Staging'
-      })
-      setDeployments(deps)
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    fetchModels()
-  }, [])
-
-  const toggleDeployment = (modelName: string) => {
-    setDeployments((prev) => ({
-      ...prev,
-      [modelName]: prev[modelName] === 'Production' ? 'Staging' : 'Production',
-    }))
-  }
+  useEffect(() => { apiClient.get('/ml/models').then(r => { setModels(r.data); setLoading(false) }).catch(() => setLoading(false)) }, [])
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-white">Enterprise Model Registry & Governance</h2>
-          <p className="text-sm text-slate-400">MLOps stage management, staging vs production deployment, and version control</p>
-        </div>
-        <button onClick={fetchModels} className="flex items-center gap-2 rounded-xl bg-slate-800 border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700">
-          <RefreshCw className="size-4" /> Refresh Registry
-        </button>
-      </div>
-
-      <GlassCard>
-        {loading ? (
-          <div className="p-8 text-center text-slate-400">Loading model registry governance metadata...</div>
-        ) : models.length === 0 ? (
-          <div className="p-8 text-center text-slate-400">No registered models found.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-300">
-              <thead className="bg-slate-950/60 text-slate-400 uppercase text-xs">
-                <tr>
-                  <th className="px-4 py-3">Model Name</th>
-                  <th className="px-4 py-3">Algorithm</th>
-                  <th className="px-4 py-3">Problem Type</th>
-                  <th className="px-4 py-3">Features</th>
-                  <th className="px-4 py-3">Deployment Stage</th>
-                  <th className="px-4 py-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {models.map((m: ModelItem) => (
-
-                  <tr key={m.model_name} className="hover:bg-white/5">
-                    <td className="px-4 py-3 font-mono font-semibold text-white">{m.model_name}</td>
-                    <td className="px-4 py-3 text-violet-300">{m.algorithm}</td>
-                    <td className="px-4 py-3 uppercase text-xs font-semibold">{m.problem_type}</td>
-                    <td className="px-4 py-3">{m.feature_count} Features</td>
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={() => toggleDeployment(m.model_name)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition ${
-                          deployments[m.model_name] === 'Production'
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                        }`}
-                      >
-                        <ShieldCheck className="size-3.5" />
-                        {deployments[m.model_name]}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={() => alert(`Downloading artifact ${m.model_name}`)}
-                        className="p-1.5 rounded-lg bg-slate-800 border border-white/10 text-slate-300 hover:bg-slate-700 mr-2"
-                      >
-                        <Download className="size-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </GlassCard>
+    <div className="p-6 space-y-7">
+      <PageHeader title="Model Registry" subtitle="Version-controlled model catalog for production deployment" icon={<ShieldCheck className="size-6" />} />
+      {loading ? <div className="grid grid-cols-1 md:grid-cols-3 gap-4">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="skeleton h-36 rounded-xl" />)}</div> : models.length === 0 ? (
+        <EmptyState icon={<Brain className="size-8" />} title="Empty Registry" description="Train models to see them here" />
+      ) : (
+        <motion.div variants={stagger} initial="hidden" animate="visible" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {models.map((m: any) => (
+            <motion.div key={m.model_name || m.name} variants={fadeUp} className="glass-card p-5">
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-gradient-to-br from-violet-500/15 to-indigo-500/10"><Brain className="size-5 text-violet-400" /></div>
+                  <div><p className="text-sm font-semibold">{m.model_name || m.name}</p><p className="text-xs text-[var(--c-text-muted)]">{m.algorithm || 'Custom'}</p></div>
+                </div>
+                <StatusBadge label={m.status || 'active'} variant={m.status === 'drifting' ? 'warning' : 'success'} dot />
+              </div>
+              {m.metrics && (
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  {Object.entries(m.metrics).slice(0, 4).map(([k, v]) => (
+                    <div key={k} className="px-2 py-1.5 rounded-lg bg-[var(--c-bg-secondary)]">
+                      <p className="text-[10px] text-[var(--c-text-muted)] uppercase">{k.replace(/_/g, ' ')}</p>
+                      <p className="text-sm font-semibold text-indigo-400">{typeof v === 'number' ? v.toFixed(3) : String(v)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center gap-2 mt-3 text-xs text-[var(--c-text-muted)]"><Clock className="size-3" />{m.created_at ? new Date(m.created_at).toLocaleDateString() : 'Recently'}</div>
+            </motion.div>
+          ))}
+        </motion.div>
+      )}
     </div>
   )
 }

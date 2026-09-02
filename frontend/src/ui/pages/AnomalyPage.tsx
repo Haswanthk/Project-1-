@@ -1,424 +1,132 @@
-import { useState, useEffect } from 'react';
-import ReactECharts from 'echarts-for-react';
-import {
-  AlertTriangle, AlertOctagon, Info, CheckCircle2,
-  RefreshCw, Filter, Sparkles, X, ChevronRight,
-} from 'lucide-react';
-import { apiClient } from '../lib/api';
+import { useEffect, useState } from 'react'
+import { motion } from 'framer-motion'
+import ReactECharts from 'echarts-for-react'
+import { AlertTriangle, Shield, CheckCircle, Clock, Search, Eye } from 'lucide-react'
+import { apiClient } from '../lib/api'
+import { PageHeader } from '../components/ui/PageHeader'
+import { CardSkeleton } from '../components/ui/LoadingSkeleton'
+import { StatusBadge } from '../components/ui/StatusBadge'
 
-type Severity = 'ALL' | 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
-type Status = 'ALL' | 'open' | 'investigating' | 'resolved';
-
-interface Anomaly {
-  id: string;
-  metric: string;
-  dataset: string;
-  timestamp: string;
-  value: number;
-  expected_value: number;
-  z_score: number;
-  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
-  status: 'open' | 'investigating' | 'resolved';
-  description: string;
-  root_cause: string;
-  affected_service: string;
-}
-
-interface Summary {
-  total: number;
-  by_severity: Record<string, number>;
-  by_status: Record<string, number>;
-  last_detected: string | null;
-}
-
-interface Explanation {
-  explanation: string;
-  severity: string;
-  provider: string;
-  grounded_on: string;
-}
-
-const SEV_CONFIG = {
-  CRITICAL: { color: '#ef4444', bg: 'bg-red-500/10',    border: 'border-red-500/30',    badge: 'badge-error',   icon: <AlertOctagon  className="w-4 h-4" /> },
-  HIGH:     { color: '#f59e0b', bg: 'bg-amber-500/10',  border: 'border-amber-500/30',  badge: 'badge-warning', icon: <AlertTriangle className="w-4 h-4" /> },
-  MEDIUM:   { color: '#3b82f6', bg: 'bg-blue-500/10',   border: 'border-blue-500/30',   badge: 'badge-info',    icon: <Info          className="w-4 h-4" /> },
-  LOW:      { color: '#10b981', bg: 'bg-emerald-500/10',border: 'border-emerald-500/30',badge: 'badge-success', icon: <CheckCircle2  className="w-4 h-4" /> },
-} as const;
-
-const STATUS_CONFIG = {
-  open:          { badge: 'badge-error',   label: 'Open' },
-  investigating: { badge: 'badge-warning', label: 'Investigating' },
-  resolved:      { badge: 'badge-success', label: 'Resolved' },
-};
+const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } } }
+const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4 } } }
 
 export function AnomalyPage() {
-  const [anomalies, setAnomalies]     = useState<Anomaly[]>([]);
-  const [summary, setSummary]         = useState<Summary | null>(null);
-  const [selected, setSelected]       = useState<Anomaly | null>(null);
-  const [explanation, setExplanation] = useState<Explanation | null>(null);
-  const [explainLoading, setExplainLoading] = useState(false);
-  const [severity, setSeverity]       = useState<Severity>('ALL');
-  const [status, setStatus]           = useState<Status>('ALL');
-  const [loading, setLoading]         = useState(true);
-
-  // New state for detection
-  const [datasets, setDatasets] = useState<any[]>([]);
-  const [selectedDatasetId, setSelectedDatasetId] = useState<string>('');
-  const [availableColumns, setAvailableColumns] = useState<string[]>([]);
-  const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
-  const [detecting, setDetecting] = useState(false);
-
-  useEffect(() => {
-    // Fetch datasets for selection
-    apiClient.get('/datasets/').then(res => setDatasets(res.data)).catch(console.error);
-  }, []);
-
-  useEffect(() => {
-    if (selectedDatasetId) {
-      const d = datasets.find(x => x.id.toString() === selectedDatasetId);
-      if (d && d.schema_json) {
-        try {
-          const parsed = JSON.parse(d.schema_json);
-          // Only numeric columns
-          const numCols = Object.keys(parsed).filter(k => 
-            parsed[k].includes('int') || parsed[k].includes('float') || parsed[k].includes('number')
-          );
-          setAvailableColumns(numCols);
-          setSelectedColumns([]);
-        } catch (e) {
-          setAvailableColumns([]);
-        }
-      }
-    } else {
-      setAvailableColumns([]);
-      setSelectedColumns([]);
-    }
-  }, [selectedDatasetId, datasets]);
-
-  const handleDetect = async () => {
-    if (!selectedDatasetId || selectedColumns.length === 0) return;
-    setDetecting(true);
-    try {
-      await apiClient.post('/anomalies/detect', {
-        dataset_id: parseInt(selectedDatasetId),
-        columns: selectedColumns,
-        contamination: 0.05
-      });
-      // Refresh list after detection
-      fetchData();
-    } catch (e) {
-      console.error('Detection failed', e);
-    } finally {
-      setDetecting(false);
-    }
-  };
+  const [anomalies, setAnomalies] = useState<any[]>([])
+  const [stats, setStats] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('all')
 
   const fetchData = async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (severity !== 'ALL') params.set('severity', severity);
-      if (status   !== 'ALL') params.set('status', status);
-      const [anRes, sumRes] = await Promise.all([
-        apiClient.get(`/anomalies/?${params.toString()}`),
-        apiClient.get('/anomalies/summary'),
-      ]);
-      setAnomalies(anRes.data);
-      setSummary(sumRes.data);
-    } catch (e) {
-      console.error('Anomaly fetch failed', e);
-    } finally {
-      setLoading(false);
-    }
-  };
+    const [aRes, sRes] = await Promise.allSettled([
+      apiClient.get('/anomalies/'), apiClient.get('/anomalies/statistics/trends'),
+    ])
+    if (aRes.status === 'fulfilled') setAnomalies(aRes.value.data)
+    if (sRes.status === 'fulfilled') setStats(sRes.value.data)
+    setLoading(false)
+  }
 
-  const fetchExplanation = async (id: string) => {
-    setExplainLoading(true);
-    setExplanation(null);
-    try {
-      const res = await apiClient.get(`/anomalies/${id}/explain`);
-      setExplanation(res.data);
-    } catch (e) {
-      console.error('Explain failed', e);
-    } finally {
-      setExplainLoading(false);
-    }
-  };
+  useEffect(() => { fetchData() }, [])
 
-  useEffect(() => { fetchData(); }, [severity, status]);
+  const handleResolve = async (id: string) => {
+    try { await apiClient.post(`/anomalies/${id}/resolve`); fetchData() } catch {}
+  }
+  const handleAcknowledge = async (id: string) => {
+    try { await apiClient.post(`/anomalies/${id}/acknowledge`); fetchData() } catch {}
+  }
 
-  const handleSelect = (a: Anomaly) => {
-    setSelected(a);
-    fetchExplanation(a.id);
-  };
+  const filtered = filter === 'all' ? anomalies : anomalies.filter(a => a.status === filter)
+  const sevColor = (s: string) => s === 'CRITICAL' ? 'error' : s === 'HIGH' ? 'warning' : s === 'MEDIUM' ? 'info' : 'neutral'
 
-  // Z-score scatter chart
-  const scatterOption = {
-    backgroundColor: 'transparent',
-    tooltip: {
-      trigger: 'item',
-      formatter: (p: any) => {
-        const a = anomalies[p.dataIndex];
-        return `<b>${a?.metric}</b><br/>Z-score: ${p.value[1].toFixed(1)}<br/>Value: ${a?.value?.toLocaleString()}`;
-      },
-    },
-    grid: { left: '3%', right: '5%', bottom: '5%', top: '5%', containLabel: true },
-    xAxis: {
-      name: 'Anomaly #',
-      type: 'value',
-      axisLabel: { color: '#64748b' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
-    },
-    yAxis: {
-      name: 'Z-Score (σ)',
-      type: 'value',
-      axisLabel: { color: '#64748b' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
-    },
-    series: [{
-      type: 'scatter',
-      symbolSize: (d: number[]) => Math.min(Math.abs(d[1]) * 5 + 10, 30),
-      data: anomalies.map((a, i) => [i + 1, a.z_score]),
-      itemStyle: {
-        color: (p: any) => {
-          const a = anomalies[p.dataIndex];
-          return SEV_CONFIG[a?.severity]?.color ?? '#6366f1';
-        },
-        opacity: 0.85,
-      },
+  const sevChart = stats ? {
+    backgroundColor: 'transparent', tooltip: { trigger: 'item' as const },
+    series: [{ type: 'pie' as const, radius: ['50%', '75%'], avoidLabelOverlap: false,
+      itemStyle: { borderRadius: 6, borderColor: '#0f172a', borderWidth: 3 },
+      label: { show: false }, emphasis: { label: { show: true, fontSize: 14, fontWeight: 'bold' as const, color: '#f1f5f9' } },
+      data: [
+        { value: stats.by_severity?.CRITICAL || 0, name: 'Critical', itemStyle: { color: '#ef4444' } },
+        { value: stats.by_severity?.HIGH || 0, name: 'High', itemStyle: { color: '#f59e0b' } },
+        { value: stats.by_severity?.MEDIUM || 0, name: 'Medium', itemStyle: { color: '#3b82f6' } },
+        { value: stats.by_severity?.LOW || 0, name: 'Low', itemStyle: { color: '#64748b' } },
+      ],
     }],
-  };
-
-  const summaryCards = summary ? [
-    { label: 'Total Detected', value: summary.total, color: 'text-white', bg: 'bg-white/5' },
-    { label: 'Critical',  value: summary.by_severity.CRITICAL  ?? 0, color: 'text-red-400',    bg: 'bg-red-500/10' },
-    { label: 'High',      value: summary.by_severity.HIGH      ?? 0, color: 'text-amber-400',  bg: 'bg-amber-500/10' },
-    { label: 'Open',      value: summary.by_status.open        ?? 0, color: 'text-red-400',    bg: 'bg-red-500/10' },
-    { label: 'Investigating', value: summary.by_status.investigating ?? 0, color: 'text-amber-400', bg: 'bg-amber-500/10' },
-    { label: 'Resolved',  value: summary.by_status.resolved    ?? 0, color: 'text-emerald-400',bg: 'bg-emerald-500/10' },
-  ] : [];
+    legend: { bottom: 0, textStyle: { color: '#94a3b8', fontSize: 11 } },
+  } : null
 
   return (
-    <div className="p-6 space-y-6 animate-fade-in">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="section-title">Anomaly Detection</h1>
-          <p className="section-subtitle">AI-powered detection with statistical significance analysis</p>
-        </div>
-        <div className="flex gap-4">
-          <button onClick={fetchData} className="btn btn-secondary gap-2">
-            <RefreshCw className="w-4 h-4" /> Refresh
-          </button>
-        </div>
-      </div>
+    <div className="p-6 space-y-7">
+      <PageHeader title="Anomaly Detection" subtitle="AI-powered detection, investigation, and resolution" icon={<AlertTriangle className="size-6" />}
+        actions={<button className="btn btn-primary btn-sm" onClick={() => apiClient.post('/anomalies/detect', { dataset: 'system_metrics', method: 'z_score' }).then(() => fetchData())}><Search className="size-3.5" /> Run Detection</button>}
+      />
 
-      {/* Detection Controls */}
-      <div className="glass-card p-5 flex flex-wrap gap-6 items-end">
-        <div className="flex-1 min-w-[200px]">
-          <label className="form-label">Target Dataset</label>
-          <select 
-            className="form-select w-full"
-            value={selectedDatasetId}
-            onChange={e => setSelectedDatasetId(e.target.value)}
-          >
-            <option value="">Select a dataset...</option>
-            {datasets.map(d => (
-              <option key={d.id} value={d.id}>{d.name}</option>
-            ))}
-          </select>
-        </div>
-        <div className="flex-[2] min-w-[300px]">
-          <label className="form-label">Numerical Features</label>
-          <div className="flex flex-wrap gap-2 mt-1 min-h-[38px] p-1 border border-[var(--c-border)] rounded bg-black/20">
-            {availableColumns.length === 0 && <span className="text-slate-500 text-sm p-1">No numeric columns available</span>}
-            {availableColumns.map(c => (
-              <label key={c} className="flex items-center gap-1.5 px-2 py-1 rounded bg-[var(--c-bg-elevated)] border border-[var(--c-border)] text-sm cursor-pointer hover:bg-white/5">
-                <input 
-                  type="checkbox" 
-                  className="rounded border-[var(--c-border)] bg-black/50 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0"
-                  checked={selectedColumns.includes(c)}
-                  onChange={(e) => {
-                    if (e.target.checked) setSelectedColumns([...selectedColumns, c]);
-                    else setSelectedColumns(selectedColumns.filter(x => x !== c));
-                  }}
-                />
-                {c}
-              </label>
-            ))}
-          </div>
-        </div>
-        <div>
-          <button 
-            className="btn btn-primary gap-2"
-            disabled={detecting || !selectedDatasetId || selectedColumns.length === 0}
-            onClick={handleDetect}
-          >
-            {detecting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-            Run Detection
-          </button>
-        </div>
-      </div>
-
-      {/* Summary Cards */}
-      {!loading && summary && (
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
-          {summaryCards.map(c => (
-            <div key={c.label} className={`rounded-xl p-3 ${c.bg} border border-white/6 text-center`}>
-              <p className={`text-xl font-bold ${c.color}`}>{c.value}</p>
-              <p className="text-xs text-slate-500 mt-0.5">{c.label}</p>
-            </div>
+      {loading ? <CardSkeleton /> : stats && (
+        <motion.div variants={stagger} initial="hidden" animate="visible" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { label: 'Total Anomalies', value: stats.total, icon: <AlertTriangle className="size-5 text-amber-400" />, gradient: 'from-amber-500/15 to-amber-600/5' },
+            { label: 'Open Critical', value: stats.open_critical, icon: <Shield className="size-5 text-rose-400" />, gradient: 'from-rose-500/15 to-rose-600/5' },
+            { label: 'Resolution Rate', value: `${stats.resolution_rate_pct}%`, icon: <CheckCircle className="size-5 text-emerald-400" />, gradient: 'from-emerald-500/15 to-emerald-600/5' },
+            { label: 'Avg Z-Score', value: stats.z_score_stats?.average, icon: <Clock className="size-5 text-blue-400" />, gradient: 'from-blue-500/15 to-blue-600/5' },
+          ].map(c => (
+            <motion.div key={c.label} variants={fadeUp} className="stat-card p-5">
+              <div className="flex items-center gap-3 mb-3"><div className={`p-2 rounded-xl bg-gradient-to-br ${c.gradient}`}>{c.icon}</div><span className="text-xs font-medium text-[var(--c-text-secondary)]">{c.label}</span></div>
+              <p className="text-2xl font-bold tracking-tight">{c.value}</p>
+            </motion.div>
           ))}
-        </div>
+        </motion.div>
       )}
 
-      {/* Scatter Chart */}
-      <div className="glass-card p-6">
-        <h3 className="section-header mb-4">Anomaly Z-Score Distribution</h3>
-        {loading ? (
-          <div className="skeleton h-48 rounded-xl" />
-        ) : (
-          <ReactECharts option={scatterOption} style={{ height: '200px' }} />
-        )}
-        <p className="text-xs text-slate-500 mt-2 text-center">Bubble size = statistical significance · Color = severity · Click a row below for AI explanation</p>
-      </div>
-
-      {/* Filters + Table */}
-      <div className="glass-card overflow-hidden">
-        <div className="p-5 border-b border-white/8 flex flex-wrap items-center gap-4">
-          <h3 className="section-header mr-auto">Detected Anomalies</h3>
-          <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-slate-400" />
-            {/* Severity filter */}
-            <select
-              className="form-select text-xs py-1.5"
-              value={severity}
-              onChange={e => setSeverity(e.target.value as Severity)}
-            >
-              {(['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as Severity[]).map(s => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-            {/* Status filter */}
-            <select
-              className="form-select text-xs py-1.5"
-              value={status}
-              onChange={e => setStatus(e.target.value as Status)}
-            >
-              {(['ALL', 'open', 'investigating', 'resolved'] as Status[]).map(s => (
-                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Severity</th>
-                <th>Metric</th>
-                <th>Observed</th>
-                <th>Expected</th>
-                <th>Z-Score</th>
-                <th>Status</th>
-                <th>Timestamp</th>
-                <th>Service</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <tr key={i}>
-                    {Array.from({ length: 9 }).map((_, j) => (
-                      <td key={j}><div className="skeleton h-4 rounded" /></td>
-                    ))}
-                  </tr>
-                ))
-              ) : anomalies.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="text-center py-10 text-slate-500">
-                    <CheckCircle2 className="w-10 h-10 mx-auto mb-2 text-emerald-500/40" />
-                    No anomalies match the current filters.
-                  </td>
-                </tr>
-              ) : (
-                anomalies.map(a => {
-                  const sc = SEV_CONFIG[a.severity];
-                  const st = STATUS_CONFIG[a.status];
-                  const isSelected = selected?.id === a.id;
-                  return (
-                    <tr
-                      key={a.id}
-                      onClick={() => handleSelect(a)}
-                      className={`cursor-pointer transition-colors ${isSelected ? 'bg-indigo-500/10' : ''}`}
-                      style={{ borderLeft: isSelected ? `3px solid ${sc.color}` : '3px solid transparent' }}
-                    >
-                      <td>
-                        <span className={`badge ${sc.badge} gap-1`}>
-                          {sc.icon} {a.severity}
-                        </span>
-                      </td>
-                      <td className="font-medium text-sm">{a.metric}</td>
-                      <td className="font-mono text-sm text-right">{a.value.toLocaleString()}</td>
-                      <td className="font-mono text-sm text-right text-slate-500">{a.expected_value.toLocaleString()}</td>
-                      <td>
-                        <span className={`font-mono font-bold text-sm ${Math.abs(a.z_score) > 5 ? 'text-red-400' : Math.abs(a.z_score) > 3 ? 'text-amber-400' : 'text-blue-400'}`}>
-                          {a.z_score > 0 ? '+' : ''}{a.z_score.toFixed(1)}σ
-                        </span>
-                      </td>
-                      <td><span className={`badge ${st.badge}`}>{st.label}</span></td>
-                      <td className="text-slate-500 text-xs">{new Date(a.timestamp).toLocaleString()}</td>
-                      <td className="text-slate-500 text-xs font-mono">{a.affected_service}</td>
-                      <td><ChevronRight className="w-4 h-4 text-slate-600" /></td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* AI Explanation Panel */}
-      {selected && (
-        <div className={`glass-card p-6 border ${SEV_CONFIG[selected.severity].border} animate-fade-in-up`}>
-          <div className="flex items-start justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className={`p-2 rounded-xl ${SEV_CONFIG[selected.severity].bg}`}>
-                <Sparkles className="w-5 h-5 text-indigo-400" />
-              </div>
-              <div>
-                <h3 className="font-bold text-white">AI Root Cause Analysis</h3>
-                <p className="text-xs text-slate-500">{selected.metric} · {selected.dataset} · Internal Analytics Engine</p>
-              </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* Anomaly List */}
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="glass-card lg:col-span-2 p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="text-sm font-semibold">Detected Anomalies</h3>
+            <div className="relative">
+              <select value={filter} onChange={e => setFilter(e.target.value)} className="form-select text-xs py-1.5 pr-8 pl-3 bg-[var(--c-bg-secondary)] rounded-lg">
+                <option value="all">All Status</option>
+                <option value="open">Open</option>
+                <option value="investigating">Investigating</option>
+                <option value="resolved">Resolved</option>
+              </select>
             </div>
-            <button onClick={() => { setSelected(null); setExplanation(null); }} className="btn btn-ghost p-1">
-              <X className="w-4 h-4" />
-            </button>
           </div>
+          <div className="space-y-3 max-h-[500px] overflow-y-auto">
+            {filtered.length === 0 ? <p className="text-sm text-[var(--c-text-muted)] py-8 text-center">No anomalies found</p> :
+              filtered.map((a: any) => (
+                <motion.div key={a.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-4 rounded-xl bg-[var(--c-bg-body)]/50 border border-[var(--c-border)] hover:border-[var(--c-border-strong)] transition-all">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <StatusBadge label={a.severity} variant={sevColor(a.severity) as any} />
+                      <StatusBadge label={a.status} variant={a.status === 'resolved' ? 'success' : a.status === 'investigating' ? 'info' : 'warning'} />
+                    </div>
+                    <span className="text-[10px] text-[var(--c-text-muted)]">{a.detected_at}</span>
+                  </div>
+                  <p className="text-sm font-medium mb-1">{a.metric} — {a.description}</p>
+                  <p className="text-xs text-[var(--c-text-secondary)] mb-3">Dataset: {a.dataset} · Z-Score: {a.z_score} · Service: {a.affected_service}</p>
+                  {a.status !== 'resolved' && (
+                    <div className="flex gap-2">
+                      {a.status === 'open' && <button onClick={() => handleAcknowledge(a.id)} className="btn btn-secondary btn-sm"><Eye className="size-3" /> Acknowledge</button>}
+                      <button onClick={() => handleResolve(a.id)} className="btn btn-success btn-sm"><CheckCircle className="size-3" /> Resolve</button>
+                    </div>
+                  )}
+                </motion.div>
+              ))
+            }
+          </div>
+        </motion.div>
 
-          {explainLoading ? (
-            <div className="space-y-3">
-              <div className="skeleton h-4 w-full rounded" />
-              <div className="skeleton h-4 w-5/6 rounded" />
-              <div className="skeleton h-4 w-4/6 rounded" />
+        {/* Severity Distribution */}
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="glass-card p-6">
+          <h3 className="text-sm font-semibold mb-4">Severity Distribution</h3>
+          {sevChart ? <ReactECharts option={sevChart} style={{ height: 280 }} /> : <div className="skeleton h-[280px] rounded-xl" />}
+          {stats && (
+            <div className="mt-4 space-y-2">
+              <h4 className="text-xs font-semibold text-[var(--c-text-muted)] uppercase tracking-wider">By Status</h4>
+              {Object.entries(stats.by_status || {}).map(([k, v]) => (
+                <div key={k} className="flex justify-between text-sm"><span className="capitalize">{k}</span><span className="font-semibold">{v as number}</span></div>
+              ))}
             </div>
-          ) : explanation ? (
-            <div
-              className="text-sm text-slate-300 leading-relaxed whitespace-pre-line"
-              dangerouslySetInnerHTML={{
-                __html: explanation.explanation
-                  .replace(/\*\*([^*]+)\*\*/g, '<strong class="text-white">$1</strong>')
-                  .replace(/\n/g, '<br/>'),
-              }}
-            />
-          ) : (
-            <p className="text-slate-500 text-sm">Failed to load explanation.</p>
           )}
-        </div>
-      )}
+        </motion.div>
+      </div>
     </div>
-  );
+  )
 }

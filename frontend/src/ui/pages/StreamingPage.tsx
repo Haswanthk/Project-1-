@@ -1,156 +1,101 @@
 import { useEffect, useState } from 'react'
+import { motion } from 'framer-motion'
 import ReactECharts from 'echarts-for-react'
-import { Radio, Activity, Zap, Server, ShieldCheck, Pause, Play } from 'lucide-react'
-import { GlassCard } from '../components/ui/GlassCard'
+import { Radio, Zap, Users, Activity } from 'lucide-react'
+import { apiClient } from '../lib/api'
+import { PageHeader } from '../components/ui/PageHeader'
+import { CardSkeleton, ChartSkeleton } from '../components/ui/LoadingSkeleton'
+import { StatusBadge } from '../components/ui/StatusBadge'
 
+const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } } }
+const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4 } } }
 
 export function StreamingPage() {
-  const [isStreaming, setIsStreaming] = useState(true)
-  const [throughputData, setThroughputData] = useState<number[]>([120, 142, 135, 160, 185, 172, 198, 210, 240, 225, 260, 275])
-  const [timeLabels, setTimeLabels] = useState<string[]>([
-    '20:10:00', '20:10:05', '20:10:10', '20:10:15', '20:10:20', '20:10:25',
-    '20:10:30', '20:10:35', '20:10:40', '20:10:45', '20:10:50', '20:10:55',
-  ])
-  const [payloadLog, setPayloadLog] = useState<string[]>([
-    '{"event_id": "evt-9012", "topic": "kafka.iot.telemetry", "timestamp": "2026-07-26T20:10:50Z", "payload": {"temp": 24.5, "vibration": 0.02}}',
-    '{"event_id": "evt-9013", "topic": "kafka.user.clicks", "timestamp": "2026-07-26T20:10:52Z", "payload": {"user_id": 481, "action": "checkout_click"}}',
-    '{"event_id": "evt-9014", "topic": "kafka.web.logs", "timestamp": "2026-07-26T20:10:55Z", "payload": {"ip": "192.168.1.104", "status": 200}}',
-  ])
+  const [summary, setSummary] = useState<any>(null)
+  const [topics, setTopics] = useState<any[]>([])
+  const [throughput, setThroughput] = useState<any>(null)
+  const [groups, setGroups] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    if (!isStreaming) return
-    const interval = setInterval(() => {
-      const now = new Date()
-      const timeStr = now.toTimeString().split(' ')[0]
-      const newVal = Math.floor(Math.random() * 80) + 220
-      setThroughputData((prev) => [...prev.slice(1), newVal])
-      setTimeLabels((prev) => [...prev.slice(1), timeStr])
-
-      const newLog = `{"event_id": "evt-${Math.floor(Math.random() * 9000) + 1000}", "topic": "kafka.telemetry", "timestamp": "${now.toISOString()}", "payload": {"val": ${(Math.random() * 100).toFixed(2)}}} `
-      setPayloadLog((prev) => [newLog, ...prev.slice(0, 7)])
-    }, 2000)
-    return () => clearInterval(interval)
-  }, [isStreaming])
-
-  const getChartOption = () => {
-    return {
-      tooltip: { trigger: 'axis' },
-      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-      xAxis: { type: 'category', data: timeLabels, axisLabel: { color: '#cbd5e1' } },
-      yAxis: { type: 'value', name: 'Events / Sec', nameTextStyle: { color: '#cbd5e1' }, axisLabel: { color: '#cbd5e1' } },
-      series: [
-        {
-          name: 'Events / Sec',
-          type: 'line',
-          smooth: true,
-          data: throughputData,
-          itemStyle: { color: '#10b981' },
-          areaStyle: {
-            color: {
-              type: 'linear',
-              x: 0, y: 0, x2: 0, y2: 1,
-              colorStops: [
-                { offset: 0, color: 'rgba(16, 185, 129, 0.4)' },
-                { offset: 1, color: 'rgba(16, 185, 129, 0.0)' },
-              ],
-            },
-          },
-        },
-      ],
-    }
+  const fetchData = async () => {
+    const [s, t, tp, g] = await Promise.allSettled([
+      apiClient.get('/streaming/summary'), apiClient.get('/streaming/topics'),
+      apiClient.get('/streaming/throughput'), apiClient.get('/streaming/consumer-groups'),
+    ])
+    if (s.status === 'fulfilled') setSummary(s.value.data)
+    if (t.status === 'fulfilled') setTopics(t.value.data)
+    if (tp.status === 'fulfilled') setThroughput(tp.value.data)
+    if (g.status === 'fulfilled') setGroups(g.value.data)
+    setLoading(false)
   }
 
+  useEffect(() => { fetchData(); const iv = setInterval(fetchData, 15000); return () => clearInterval(iv) }, [])
+
+  const throughputChart = throughput ? {
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis' as const, backgroundColor: '#0f172a', borderColor: '#1e293b', textStyle: { color: '#e2e8f0' } },
+    grid: { top: 20, bottom: 30, left: 50, right: 20 },
+    xAxis: { type: 'category' as const, data: throughput.timestamps || throughput.map?.((_: any, i: number) => `T-${60 - i}`), axisLabel: { color: '#64748b', fontSize: 10 }, axisLine: { lineStyle: { color: '#1e293b' } } },
+    yAxis: { type: 'value' as const, name: 'Events/sec', nameTextStyle: { color: '#64748b' }, axisLabel: { color: '#64748b', fontSize: 10 }, splitLine: { lineStyle: { color: '#1e293b' } } },
+    series: [{ data: throughput.values || throughput.map?.((t: any) => t.events_per_second), type: 'line' as const, smooth: true, symbol: 'none',
+      lineStyle: { color: '#06b6d4', width: 2.5 },
+      areaStyle: { color: { type: 'linear' as const, x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(6,182,212,0.25)' }, { offset: 1, color: 'rgba(6,182,212,0)' }] } },
+    }],
+  } : null
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-white">Real-Time Streaming Analytics</h2>
-          <p className="text-sm text-slate-400">Low-latency event processing, Kafka message ingestion, and live telemetry</p>
-        </div>
-        <button
-          onClick={() => setIsStreaming(!isStreaming)}
-          className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
-            isStreaming ? 'bg-amber-600/20 text-amber-300 border border-amber-500/30 hover:bg-amber-600/30' : 'bg-emerald-600 text-white hover:bg-emerald-500'
-          }`}
-        >
-          {isStreaming ? <Pause className="size-4" /> : <Play className="size-4" />}
-          {isStreaming ? 'Pause Real-Time Feed' : 'Resume Live Stream'}
-        </button>
-      </div>
+    <div className="p-6 space-y-7">
+      <PageHeader title="Streaming" subtitle="Real-time event streaming and Kafka topic monitoring" icon={<Radio className="size-6" />} />
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <GlassCard>
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-300">
-              <Zap className="size-6" />
-            </div>
-            <div>
-              <p className="text-xs text-slate-400 font-medium">Live Ingestion Rate</p>
-              <p className="text-xl font-bold text-white">{throughputData[throughputData.length - 1]} evt/s</p>
-            </div>
-          </div>
-        </GlassCard>
-        <GlassCard>
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-blue-500/20 text-blue-300">
-              <Radio className="size-6" />
-            </div>
-            <div>
-              <p className="text-xs text-slate-400 font-medium">Kafka Topics Active</p>
-              <p className="text-xl font-bold text-white">8 Topics</p>
-            </div>
-          </div>
-        </GlassCard>
-        <GlassCard>
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-300">
-              <Server className="size-6" />
-            </div>
-            <div>
-              <p className="text-xs text-slate-400 font-medium">Consumer Group Lag</p>
-              <p className="text-xl font-bold text-white">0 ms</p>
-            </div>
-          </div>
-        </GlassCard>
-        <GlassCard>
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-300">
-              <ShieldCheck className="size-6" />
-            </div>
-            <div>
-              <p className="text-xs text-slate-400 font-medium">Stream Schema Guard</p>
-              <p className="text-xl font-bold text-white">Enforced</p>
-            </div>
-          </div>
-        </GlassCard>
-      </div>
-
-      {/* Chart */}
-      <GlassCard>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-white flex items-center gap-2">
-            <Activity className="size-5 text-emerald-400" /> Live Stream Event Throughput (Events/Sec)
-          </h3>
-          <span className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
-            <span className="size-2 rounded-full bg-emerald-400 animate-ping" /> WebSocket Connected
-          </span>
-        </div>
-        <ReactECharts option={getChartOption()} style={{ height: '300px' }} />
-      </GlassCard>
-
-      {/* Live Payload Stream Log */}
-      <GlassCard>
-        <h3 className="text-lg font-bold text-white mb-3">Live Payload Event Inspector</h3>
-        <div className="p-4 rounded-xl bg-slate-950 border border-white/10 space-y-2 font-mono text-xs max-h-64 overflow-y-auto">
-          {payloadLog.map((log, idx) => (
-            <div key={idx} className="text-emerald-300/90 border-b border-white/5 pb-1">
-              <span className="text-slate-500 mr-2">[{new Date().toLocaleTimeString()}]</span>
-              {log}
-            </div>
+      {loading ? <CardSkeleton /> : summary && (
+        <motion.div variants={stagger} initial="hidden" animate="visible" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { label: 'Active Topics', value: summary.active_topics ?? topics.length, icon: <Radio className="size-5 text-cyan-400" />, gradient: 'from-cyan-500/15 to-cyan-600/5' },
+            { label: 'Events/sec', value: summary.events_per_second ?? summary.total_events_per_sec, icon: <Zap className="size-5 text-amber-400" />, gradient: 'from-amber-500/15 to-amber-600/5' },
+            { label: 'Consumer Groups', value: summary.consumer_groups ?? groups.length, icon: <Users className="size-5 text-violet-400" />, gradient: 'from-violet-500/15 to-violet-600/5' },
+            { label: 'Total Events (24h)', value: summary.total_events_24h?.toLocaleString() ?? '—', icon: <Activity className="size-5 text-emerald-400" />, gradient: 'from-emerald-500/15 to-emerald-600/5' },
+          ].map(c => (
+            <motion.div key={c.label} variants={fadeUp} className="stat-card p-5">
+              <div className="flex items-center gap-3 mb-3"><div className={`p-2 rounded-xl bg-gradient-to-br ${c.gradient}`}>{c.icon}</div><span className="text-xs font-medium text-[var(--c-text-secondary)]">{c.label}</span></div>
+              <p className="text-2xl font-bold tracking-tight">{c.value}</p>
+            </motion.div>
           ))}
-        </div>
-      </GlassCard>
+        </motion.div>
+      )}
+
+      {/* Throughput */}
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="glass-card p-6">
+        <h3 className="text-sm font-semibold mb-4">Throughput (Real-time)</h3>
+        {loading || !throughputChart ? <ChartSkeleton /> : <ReactECharts option={throughputChart} style={{ height: 300 }} />}
+      </motion.div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Topics */}
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="glass-card p-6">
+          <h3 className="text-sm font-semibold mb-4">Topics</h3>
+          <div className="space-y-2.5 max-h-[300px] overflow-y-auto">
+            {topics.map((t: any, i: number) => (
+              <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-[var(--c-bg-body)]/50 border border-[var(--c-border)]">
+                <div><p className="text-sm font-medium">{t.name}</p><p className="text-xs text-[var(--c-text-muted)]">{t.partitions} partitions</p></div>
+                <div className="text-right"><p className="text-sm font-semibold text-cyan-400">{t.messages_per_sec}/s</p><StatusBadge label={t.status || 'active'} variant="success" /></div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+
+        {/* Consumer Groups */}
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="glass-card p-6">
+          <h3 className="text-sm font-semibold mb-4">Consumer Groups</h3>
+          <div className="space-y-2.5 max-h-[300px] overflow-y-auto">
+            {groups.map((g: any, i: number) => (
+              <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-[var(--c-bg-body)]/50 border border-[var(--c-border)]">
+                <div><p className="text-sm font-medium">{g.name}</p><p className="text-xs text-[var(--c-text-muted)]">{g.members} members</p></div>
+                <div className="text-right"><p className={`text-sm font-semibold ${g.lag > 100 ? 'text-amber-400' : 'text-emerald-400'}`}>Lag: {g.lag}</p><StatusBadge label={g.state || g.status || 'stable'} variant={g.lag > 100 ? 'warning' : 'success'} /></div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      </div>
     </div>
   )
 }
