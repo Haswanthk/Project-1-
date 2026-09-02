@@ -25,7 +25,12 @@ class AIServiceLayer:
             ProviderState("LocalLlama", settings.enable_local_llama, bool(settings.local_llama_endpoint)),
         ]
 
-    def _call_gemini(self, prompt: str, system_prompt: str = "") -> str | None:
+    def _call_gemini(
+        self,
+        prompt: str = "",
+        system_prompt: str = "",
+        messages: list[dict[str, Any]] | None = None,
+    ) -> str | None:
         """Calls Google Gemini API using configured key and gemini-2.5-flash."""
         if not (settings.enable_gemini and settings.gemini_api_key):
             return None
@@ -33,13 +38,26 @@ class AIServiceLayer:
             import httpx
 
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.gemini_api_key}"
-            payload: dict[str, Any] = {
-                "contents": [{"parts": [{"text": prompt}]}]
-            }
+
+            contents = []
+            if messages:
+                for m in messages:
+                    role = "user" if m.get("role") == "user" else "model"
+                    text = m.get("content") or m.get("text") or ""
+                    if text:
+                        contents.append({"role": role, "parts": [{"text": str(text)}]})
+
+            # Ensure current prompt is in contents
+            if not contents and prompt:
+                contents = [{"role": "user", "parts": [{"text": str(prompt)}]}]
+            elif prompt and (not contents or contents[-1].get("role") != "user" or contents[-1]["parts"][0]["text"] != prompt):
+                contents.append({"role": "user", "parts": [{"text": str(prompt)}]})
+
+            payload: dict[str, Any] = {"contents": contents}
             if system_prompt:
                 payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
 
-            with httpx.Client(timeout=15.0) as client:
+            with httpx.Client(timeout=25.0) as client:
                 res = client.post(url, json=payload)
                 if res.status_code == 200:
                     data = res.json()
@@ -48,30 +66,46 @@ class AIServiceLayer:
                         parts = candidates[0]["content"].get("parts", [])
                         if parts and "text" in parts[0]:
                             return parts[0]["text"]
+                else:
+                    print(f"Gemini API returned status {res.status_code}: {res.text}")
         except Exception as e:
-            # Fallback on any connection error
-            pass
+            print(f"Gemini call exception: {e}")
         return None
 
-    def execute_feature(self, feature: str, prompt: str = "", context: dict | None = None) -> dict[str, Any]:
+    def execute_feature(
+        self,
+        feature: str,
+        prompt: str = "",
+        context: dict | None = None,
+        messages: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         ready = any(provider.enabled and provider.configured for provider in self.providers())
         active_provider = next((p.name for p in self.providers() if p.enabled and p.configured), "Internal Analytics Engine")
 
-        # If Gemini is active, attempt real generation
-        if active_provider == "Gemini" and prompt:
+        # If Gemini is active, run real AI generation
+        if active_provider == "Gemini" and (prompt or messages):
             feature_instructions = {
-                "chat_with_data": "You are an enterprise AI data analytics assistant. Ground your response in business KPIs, churn rates, revenue metrics, and data trends. Be concise, structured, and insightful.",
-                "natural_language_sql": "You are an expert SQL engineer. Given the user prompt, return a valid, optimized SQL query with clear comments.",
-                "business_insights": "You are a senior business intelligence strategist. Provide 3-5 executive-level strategic insights based on the prompt.",
-                "executive_summary": "You are an executive analytics briefer. Produce a bulleted high-level executive summary.",
-                "prediction_explanation": "You are an ML explainability specialist. Explain feature contributions and model confidence for this prediction.",
-                "automatic_report_generation": "You are an automated reporting engine. Produce a detailed executive analytics report with sections and key metrics.",
-                "data_storytelling": "You are a data storyteller. Craft a compelling narrative tracing trends, root causes, and outcomes.",
-                "forecast_explanation": "You are a time-series forecasting analyst. Explain the forecast trajectory, seasonality, and confidence intervals.",
-                "anomaly_explanation": "You are an anomaly detection specialist. Explain the severity, Z-score, potential root cause, and remediation steps.",
+                "chat_with_data": (
+                    "You are an expert AI data scientist and analytics copilot. "
+                    "Provide comprehensive, intelligent, and accurate analysis. Write code, formulas, or SQL queries when relevant. "
+                    "Be structured, thoughtful, and professional. Use markdown formatting (headings, bold text, bullet points, code blocks). "
+                    "Do not use canned or pre-recorded replies."
+                ),
+                "natural_language_sql": "You are a senior SQL architect. Given the prompt and data structure, generate production-ready, optimized SQL queries with concise comments.",
+                "business_insights": "You are a business intelligence director. Deliver actionable, data-driven executive insights and strategic opportunities based on the input.",
+                "executive_summary": "You are an executive analytics briefer. Produce a bulleted high-level executive briefing summarizing key trends, risks, and next steps.",
+                "prediction_explanation": "You are an ML explainability expert. Explain feature weights, model logic, and factors impacting predictions.",
+                "automatic_report_generation": "You are an automated intelligence reporter. Generate an in-depth analytics report with executive summary, findings, and recommendations.",
+                "data_storytelling": "You are a narrative data specialist. Weave metrics and timeline events into a compelling data story detailing causes and outcomes.",
+                "forecast_explanation": "You are a forecasting analyst. Explain projections, seasonal variations, model assumptions, and prediction intervals.",
+                "anomaly_explanation": "You are an anomaly detection specialist. Explain deviation significance, root causes, and recommended mitigation actions.",
             }
-            sys_inst = feature_instructions.get(feature, "You are an enterprise analytics copilot.")
-            real_text = self._call_gemini(f"Task: {feature}\nInput: {prompt}", system_prompt=sys_inst)
+            sys_inst = feature_instructions.get(feature, "You are an enterprise AI analytics copilot.")
+            if context and context.get("workspace"):
+                sys_inst += f"\n\nActive Platform Workspace State:\n{context['workspace']}"
+
+            user_query = prompt or (messages[-1]["content"] if messages else "")
+            real_text = self._call_gemini(user_query, system_prompt=sys_inst, messages=messages)
             if real_text:
                 return {
                     "feature": feature,
@@ -80,7 +114,8 @@ class AIServiceLayer:
                     "provider_ready": True,
                     "prompt": prompt,
                     "response": real_text,
-                    "message": "Execution completed via Google Gemini.",
+                    "answer": real_text,
+                    "message": "Generated by Google Gemini (gemini-2.5-flash).",
                 }
 
         responses = {

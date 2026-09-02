@@ -7,7 +7,10 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.core.deps import get_current_user
+from pathlib import Path
+from sqlalchemy.orm import Session
+from app.core.deps import get_current_user, get_db
+from app.models.dataset import Dataset
 from app.schemas.ai import AIRequest, AIResponse
 from app.services.ai_service import AIServiceLayer
 
@@ -161,18 +164,40 @@ def providers(_: object = Depends(get_current_user)):
 
 
 @router.post("/chat-with-data", response_model=AIResponse)
-def chat_with_data(payload: AIRequest | None = None, _: object = Depends(get_current_user)):
+def chat_with_data(
+    payload: AIRequest | None = None,
+    db: Session = Depends(get_db),
+    _: object = Depends(get_current_user),
+):
     prompt = payload.prompt if payload else ""
-    response = _build_response(prompt, None)
-    return {
-        "feature": "chat_with_data",
-        "status": "synthetic_ready",
-        "provider": "Internal Analytics Engine",
-        "provider_ready": False,
-        "prompt": prompt,
-        "response": response,
-        "message": "Response grounded on platform mock dataset.",
-    }
+    messages = payload.messages if payload else None
+
+    # Gather real workspace state (datasets & models)
+    context_parts = []
+    try:
+        datasets = db.query(Dataset).order_by(Dataset.id.desc()).limit(10).all()
+        if datasets:
+            ds_info = [f"- {d.name} ({d.row_count or 0} rows, {d.column_count or 0} columns)" for d in datasets]
+            context_parts.append("Active Workspace Datasets:\n" + "\n".join(ds_info))
+    except Exception:
+        pass
+
+    try:
+        model_dir = Path("models")
+        if model_dir.exists():
+            models = [f.name for f in model_dir.glob("*.pkl")]
+            if models:
+                context_parts.append("Trained ML Models in Registry:\n" + "\n".join(f"- {m}" for m in models))
+    except Exception:
+        pass
+
+    ws_context = "\n\n".join(context_parts)
+    return service.execute_feature(
+        "chat_with_data",
+        prompt=prompt,
+        context={"workspace": ws_context},
+        messages=messages,
+    )
 
 
 @router.post("/natural-language-sql", response_model=AIResponse)
