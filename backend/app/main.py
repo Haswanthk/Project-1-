@@ -15,6 +15,16 @@ import app.models  # noqa: F401 – registers all ORM models with Base.metadata
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    if "sqlite" in settings.database_url:
+        with engine.connect() as conn:
+            try:
+                from sqlalchemy import text
+                cols = [r[1] for r in conn.execute(text("PRAGMA table_info(users)")).fetchall()]
+                if "updated_at" not in cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN updated_at DATETIME"))
+                    conn.commit()
+            except Exception:
+                pass
     yield
     await ws_manager.close_all()
 
@@ -32,6 +42,17 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+
+@app.get("/")
+def root() -> dict[str, str]:
+    return {
+        "name": settings.app_name,
+        "status": "online",
+        "docs": "/docs",
+        "health": "/health",
+        "api_v1": settings.api_v1_prefix,
+    }
 
 
 @app.get("/health")
