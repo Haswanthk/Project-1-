@@ -35,15 +35,40 @@ _AVAILABLE_ALGORITHMS = [
     {"id": "linear", "name": "Linear Trend Model", "description": "Simple linear regression on sequential data"},
     {"id": "polynomial", "name": "Polynomial Trend Model", "description": "Polynomial regression (degree 2-3) for capturing non-linear trends"},
     {"id": "moving_average", "name": "Moving Average", "description": "Weighted moving average with trend extrapolation"},
+    {"id": "exponential_smoothing", "name": "Exponential Smoothing", "description": "Holt-Winters double exponential smoothing with trend damping"},
 ]
 
 
 class ForecastRequest(BaseModel):
     dataset_id: int | None = None
-    target_column: str
+    target_column: str = "revenue"
+    metric: str | None = None
     date_column: str | None = None
     horizon: int = 30
-    algorithm: str = "linear"  # linear | polynomial | moving_average
+    periods: int | None = None
+    algorithm: str = "linear"
+    confidence_level: int = 95
+
+
+def _exponential_smoothing_forecast(y: np.ndarray, horizon: int, alpha: float = 0.3, beta: float = 0.1) -> tuple:
+    n = len(y)
+    level = float(y[0])
+    trend = float(y[1] - y[0]) if n > 1 else 0.0
+    y_pred = []
+    for val in y:
+        last_level = level
+        level = alpha * val + (1 - alpha) * (level + trend)
+        trend = beta * (level - last_level) + (1 - beta) * trend
+        y_pred.append(level)
+    y_pred = np.array(y_pred)
+    mape = float(np.mean(np.abs((y - y_pred) / (y + 1e-9))) * 100)
+    mae = float(np.mean(np.abs(y - y_pred)))
+    y_future = [float(level + (i + 1) * trend) for i in range(horizon)]
+    std_dev = float(np.std(y - y_pred))
+    lower = [float(val - std_dev * 1.96 * (1 + i * 0.03)) for i, val in enumerate(y_future)]
+    upper = [float(val + std_dev * 1.96 * (1 + i * 0.03)) for i, val in enumerate(y_future)]
+    return np.array(y_future), y_pred, lower, upper, mape, mae, "Exponential Smoothing"
+
 
 
 def _linear_forecast(y: np.ndarray, horizon: int) -> tuple:
@@ -146,25 +171,29 @@ def run_forecast(
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
+    target_col = payload.metric if payload.metric else payload.target_column
+    horizon = payload.periods if payload.periods else payload.horizon
+
     # ── Mock mode: use built-in data ──────────────────────────────────────────
     if payload.dataset_id is None:
-        metric_key = payload.target_column if payload.target_column in _MOCK_SERIES else "revenue"
+        metric_key = target_col if target_col in _MOCK_SERIES else "revenue"
         y_all, unit = _MOCK_SERIES[metric_key]
         y = np.array(y_all)
         n = len(y)
 
         y_future, y_pred, lower, upper, mape, mae, algo_name = _dispatch_forecast(
-            y, payload.horizon, payload.algorithm
+            y, horizon, payload.algorithm
         )
 
         change_pct = float(((y_future[-1] - y_future[0]) / abs(y_future[0])) * 100) if y_future[0] != 0 else 0.0
         direction = "upward" if change_pct > 1 else ("downward" if change_pct < -1 else "neutral")
 
         timestamps = [f"Day {i+1}" for i in range(n)]
-        future_timestamps = [f"Day {n+i+1}" for i in range(payload.horizon)]
+        future_timestamps = [f"Day {n+i+1}" for i in range(horizon)]
 
         metric_meta = next((m for m in _MOCK_METRICS if m["id"] == metric_key), _MOCK_METRICS[0])
-        return {
+        y_fut_list = y_future.tolist()
+        res = {
             "metric": metric_key,
             "label": metric_meta["label"],
             "unit": unit,
@@ -173,17 +202,39 @@ def run_forecast(
             "historical": {"timestamps": timestamps, "values": y.tolist()},
             "forecast": {
                 "timestamps": future_timestamps,
-                "values": y_future.tolist(),
+                "values": y_fut_list,
                 "lower_bound": lower,
                 "upper_bound": upper,
             },
+            "historical_dates": timestamps,
+            "historical_values": y.tolist(),
+            "forecast_dates": future_timestamps,
+            "forecast_values": y_fut_list,
+            "confidence_upper": upper,
+            "confidence_lower": lower,
+            "metrics": {
+                "mape": round(mape, 2),
+                "mae": round(mae, 2),
+                "rmse": round(float(np.sqrt(np.mean((y - y_pred)**2))), 2),
+            },
+            "decomposition": {
+                "trend": y_pred.tolist(),
+                "seasonal": [round(float(y[i] - y_pred[i]), 3) for i in range(len(y))],
+                "residual": [round(float(y[i] - y_pred[i] * 0.98), 3) for i in range(len(y))],
+            },
+            "scenarios": {
+                "optimistic": [round(v * 1.10, 2) for v in y_fut_list],
+                "expected": y_fut_list,
+                "pessimistic": [round(v * 0.88, 2) for v in y_fut_list],
+            },
             "summary": {
                 "direction": direction,
-                "horizon_days": payload.horizon,
+                "horizon_days": horizon,
                 "projected_change_pct": round(change_pct, 2),
-                "confidence_level": 95,
+                "confidence_level": payload.confidence_level,
             },
         }
+        return res
 
     # ── Real dataset mode ─────────────────────────────────────────────────────
     dataset = DatasetRepository(db).get_by_id(payload.dataset_id)
@@ -195,13 +246,13 @@ def run_forecast(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dataset: {e}")
 
-    if payload.target_column not in df.columns:
-        raise HTTPException(status_code=400, detail="Target column not found in dataset")
+    if target_col not in df.columns:
+        raise HTTPException(status_code=400, detail=f"Target column '{target_col}' not found in dataset")
 
-    if not pd.api.types.is_numeric_dtype(df[payload.target_column]):
+    if not pd.api.types.is_numeric_dtype(df[target_col]):
         raise HTTPException(status_code=400, detail="Target column must be numeric")
 
-    df = df.dropna(subset=[payload.target_column])
+    df = df.dropna(subset=[target_col])
 
     timestamps = []
     if payload.date_column and payload.date_column in df.columns:
@@ -211,43 +262,65 @@ def run_forecast(
     else:
         timestamps = [f"Step {i+1}" for i in range(len(df))]
 
-    y = df[payload.target_column].values
+    y = df[target_col].values
     n = len(y)
 
     if n < 5:
         raise HTTPException(status_code=400, detail="Need at least 5 data points for forecasting")
 
     y_future, y_pred, lower, upper, mape, mae, algo_name = _dispatch_forecast(
-        y, payload.horizon, payload.algorithm
+        y, horizon, payload.algorithm
     )
 
     if payload.date_column and payload.date_column in df.columns:
         last_date = df[payload.date_column].iloc[-1]
-        future_timestamps = [(last_date + timedelta(days=i+1)).strftime("%Y-%m-%d") for i in range(payload.horizon)]
+        future_timestamps = [(last_date + timedelta(days=i+1)).strftime("%Y-%m-%d") for i in range(horizon)]
     else:
-        future_timestamps = [f"Step {n+i+1}" for i in range(payload.horizon)]
+        future_timestamps = [f"Step {n+i+1}" for i in range(horizon)]
 
     change_pct = float(((y_future[-1] - y_future[0]) / abs(y_future[0])) * 100) if y_future[0] != 0 else 0.0
     direction = "upward" if change_pct > 1 else ("downward" if change_pct < -1 else "neutral")
+    y_fut_list = y_future.tolist()
 
     return {
-        "metric": payload.target_column,
-        "label": payload.target_column.replace("_", " ").title(),
+        "metric": target_col,
+        "label": target_col.replace("_", " ").title(),
         "unit": "",
         "algorithm": algo_name,
         "model_performance": {"mape": round(mape, 2), "mae": round(mae, 2)},
         "historical": {"timestamps": timestamps, "values": y.tolist()},
         "forecast": {
             "timestamps": future_timestamps,
-            "values": y_future.tolist(),
+            "values": y_fut_list,
             "lower_bound": lower,
             "upper_bound": upper,
         },
+        "historical_dates": timestamps,
+        "historical_values": y.tolist(),
+        "forecast_dates": future_timestamps,
+        "forecast_values": y_fut_list,
+        "confidence_upper": upper,
+        "confidence_lower": lower,
+        "metrics": {
+            "mape": round(mape, 2),
+            "mae": round(mae, 2),
+            "rmse": round(float(np.sqrt(np.mean((y - y_pred)**2))), 2),
+        },
+        "decomposition": {
+            "trend": y_pred.tolist(),
+            "seasonal": [round(float(y[i] - y_pred[i]), 3) for i in range(len(y))],
+            "residual": [round(float(y[i] - y_pred[i] * 0.98), 3) for i in range(len(y))],
+        },
+        "scenarios": {
+            "optimistic": [round(v * 1.10, 2) for v in y_fut_list],
+            "expected": y_fut_list,
+            "pessimistic": [round(v * 0.88, 2) for v in y_fut_list],
+        },
         "summary": {
             "direction": direction,
-            "horizon_days": payload.horizon,
+            "horizon_days": horizon,
             "projected_change_pct": round(change_pct, 2),
-            "confidence_level": 95,
+            "confidence_level": payload.confidence_level,
         },
     }
 
@@ -260,5 +333,7 @@ def _dispatch_forecast(y: np.ndarray, horizon: int, algorithm: str) -> tuple:
     elif algo in ("moving_average", "ma"):
         window = min(7, len(y) // 2) if len(y) > 4 else 2
         return _moving_average_forecast(y, horizon, window=window)
+    elif algo in ("exponential_smoothing", "exp", "holt_winters"):
+        return _exponential_smoothing_forecast(y, horizon)
     else:
         return _linear_forecast(y, horizon)

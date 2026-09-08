@@ -209,7 +209,29 @@ def list_nodes(_: object = Depends(get_current_user)):
     for node in _NODES:
         node["cpu"] = round(max(1.0, node["cpu"] + random.uniform(-2, 2)), 1)
         node["memory"] = round(max(5.0, min(99.0, node["memory"] + random.uniform(-1, 1))), 1)
+        node["cpu_percent"] = node["cpu"]
+        node["memory_percent"] = node["memory"]
+        node["role"] = node["type"]
     return _NODES
+
+
+class NodeActionRequest(BaseModel):
+    action: str = "restart"  # restart | clear_cache | drain
+
+
+@router.post("/nodes/{node_id}/action")
+def node_action(node_id: str, body: NodeActionRequest, _: object = Depends(get_current_user)):
+    node = next((n for n in _NODES if n["id"] == node_id), None)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    if body.action == "clear_cache":
+        node["memory"] = max(15.0, round(node["memory"] * 0.6, 1))
+        node["memory_percent"] = node["memory"]
+    elif body.action == "restart":
+        node["uptime_hours"] = 0
+        node["cpu"] = 5.0
+        node["cpu_percent"] = 5.0
+    return {"node_id": node_id, "action": body.action, "status": "success", "node": node}
 
 
 @router.get("/metrics/summary")
@@ -267,6 +289,11 @@ def metrics_timeseries(_: object = Depends(get_current_user)):
 
 @router.get("/model-drift")
 def model_drift(_: object = Depends(get_current_user)):
+    return _MODEL_DRIFT
+
+
+@router.get("/drift")
+def get_drift(_: object = Depends(get_current_user)):
     return _MODEL_DRIFT
 
 

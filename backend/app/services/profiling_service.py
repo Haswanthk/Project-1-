@@ -11,12 +11,15 @@ class ProfilingService:
         file = Path(path)
         suffix = file.suffix.lower()
         if suffix == ".csv":
-            return pd.read_csv(path)
-        if suffix in {".xlsx", ".xls"}:
-            return pd.read_excel(path)
-        if suffix == ".json":
-            return pd.read_json(path)
-        raise ValueError(f"Unsupported file format: {suffix}")
+            df = pd.read_csv(path)
+        elif suffix in {".xlsx", ".xls"}:
+            df = pd.read_excel(path)
+        elif suffix == ".json":
+            df = pd.read_json(path)
+        else:
+            raise ValueError(f"Unsupported file format: {suffix}")
+        df.columns = [str(c).strip() for c in df.columns]
+        return df
 
     def profile(self, frame: pd.DataFrame) -> dict[str, Any]:
         numeric = frame.select_dtypes(include=["number"])

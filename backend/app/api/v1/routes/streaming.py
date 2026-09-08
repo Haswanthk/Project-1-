@@ -118,14 +118,63 @@ def _generate_event() -> dict[str, Any]:
     }
 
 
+_recent_events: list[dict[str, Any]] = []
+
+
+class ProduceEventRequest(BaseModel):
+    topic: str
+    key: str = ""
+    payload: dict[str, Any]
+    partition: int | None = None
+
+
 @router.get("/events")
-def get_streaming_events(count: int = 20, _: object = Depends(get_current_user)):
-    """Return a batch of simulated streaming events."""
-    events = [_generate_event() for _ in range(min(count, 100))]
+def get_streaming_events(count: int = 20, topic: str = "", _: object = Depends(get_current_user)):
+    """Return a batch of live and simulated streaming events."""
+    global _recent_events
+    # Generate 3-5 fresh events per request if buffer is small
+    new_events = [_generate_event() for _ in range(random.randint(2, 5))]
+    _recent_events = (new_events + _recent_events)[:100]
+
+    filtered = _recent_events
+    if topic:
+        filtered = [e for e in filtered if e["topic"] == topic]
+
     return {
-        "events": events,
-        "total": len(events),
+        "events": filtered[:min(count, 50)],
+        "total": len(filtered),
         "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+
+@router.post("/produce")
+def produce_event(body: ProduceEventRequest, _: object = Depends(get_current_user)):
+    """Publish a real synthetic or custom message to a Kafka topic."""
+    global _recent_events
+    event = {
+        "event_id": f"evt-{uuid.uuid4().hex[:8]}",
+        "topic": body.topic,
+        "partition": body.partition if body.partition is not None else random.randint(0, 5),
+        "offset": random.randint(10_000_000, 99_999_999),
+        "timestamp": datetime.now(UTC).isoformat(),
+        "key": body.key or f"key-{uuid.uuid4().hex[:6]}",
+        "payload": body.payload,
+        "is_custom": True,
+    }
+    _recent_events.insert(0, event)
+    if len(_recent_events) > 100:
+        _recent_events.pop()
+
+    # Slightly bump throughput buffer
+    if _throughput_buffer:
+        _throughput_buffer[-1]["events_per_sec"] += 1
+
+    return {
+        "status": "published",
+        "event": event,
+        "topic": body.topic,
+        "partition": event["partition"],
+        "offset": event["offset"],
     }
 
 
@@ -137,6 +186,7 @@ def list_topics(_: object = Depends(get_current_user)):
             10_000,
             topic["messages_per_min"] + random.randint(-5000, 5000),
         )
+        topic["messages_per_sec"] = round(topic["messages_per_min"] / 60, 1)
     return _TOPICS
 
 
@@ -155,6 +205,7 @@ def get_throughput(_: object = Depends(get_current_user)):
     return {
         "timestamps": [p["timestamp"] for p in _throughput_buffer],
         "events_per_sec": [p["events_per_sec"] for p in _throughput_buffer],
+        "values": [p["events_per_sec"] for p in _throughput_buffer],
         "bytes_per_sec": [p["bytes_per_sec"] for p in _throughput_buffer],
         "error_rate": [p["error_rate"] for p in _throughput_buffer],
     }
@@ -165,6 +216,7 @@ def list_consumer_groups(_: object = Depends(get_current_user)):
     """List Kafka consumer groups with lag info."""
     for cg in _CONSUMER_GROUPS:
         cg["lag"] = random.randint(0, 50) if random.random() > 0.7 else 0
+        cg["state"] = "stable" if cg["lag"] < 50 else "rebalancing"
     return _CONSUMER_GROUPS
 
 
@@ -172,14 +224,20 @@ def list_consumer_groups(_: object = Depends(get_current_user)):
 def streaming_summary(_: object = Depends(get_current_user)):
     """Aggregated streaming platform summary."""
     total_msgs_per_min = sum(t["messages_per_min"] for t in _TOPICS)
+    current_eps = _throughput_buffer[-1]["events_per_sec"] if _throughput_buffer else 240
     return {
         "total_topics": len(_TOPICS),
+        "active_topics": len(_TOPICS),
         "total_partitions": sum(t["partitions"] for t in _TOPICS),
         "total_messages_per_min": total_msgs_per_min,
         "total_consumer_groups": len(_CONSUMER_GROUPS),
+        "consumer_groups": len(_CONSUMER_GROUPS),
         "total_consumers": sum(cg["members"] for cg in _CONSUMER_GROUPS),
         "total_lag": sum(cg["lag"] for cg in _CONSUMER_GROUPS),
-        "avg_events_per_sec": _throughput_buffer[-1]["events_per_sec"] if _throughput_buffer else 0,
+        "avg_events_per_sec": current_eps,
+        "events_per_second": current_eps,
+        "total_events_per_sec": current_eps,
+        "total_events_24h": 412_890_000,
         "status": "healthy",
         "timestamp": datetime.now(UTC).isoformat(),
     }

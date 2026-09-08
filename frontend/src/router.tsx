@@ -1,6 +1,7 @@
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 
 import { AppShell } from './ui/layout/AppShell'
+import { HomePage } from './ui/pages/HomePage'
 import { LoginPage } from './ui/pages/LoginPage'
 import { RegisterPage } from './ui/pages/RegisterPage'
 import { useAuthStore } from './ui/state/authStore'
@@ -37,9 +38,12 @@ function ProtectedOutlet() {
 export function AppRouter() {
   return (
     <Routes>
+      {/* ── Public Routes ── */}
+      <Route path="/"         element={<HomePage />} />
       <Route path="/login"    element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
 
+      {/* ── Protected Workspace Routes ── */}
       <Route element={<ProtectedOutlet />}>
         <Route element={<AppShell />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
@@ -76,7 +80,7 @@ export function AppRouter() {
         </Route>
       </Route>
 
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }

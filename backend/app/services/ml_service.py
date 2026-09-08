@@ -74,52 +74,93 @@ class MLService:
             raise ValueError("Dataset not found")
 
         df = self._load_dataframe(dataset.file_path)
-        if payload.target_column not in df.columns:
-            raise ValueError(f"Target column '{payload.target_column}' not found in dataset")
+        col_lookup = {str(c).strip().lower(): str(c).strip() for c in df.columns}
+
+        target_raw = str(payload.target_column).strip()
+        if target_raw.lower() not in col_lookup:
+            raise ValueError(f"Target column '{target_raw}' not found in dataset. Available columns: {list(df.columns)}")
+        target_col_clean = col_lookup[target_raw.lower()]
 
         algo = (payload.algorithm_id or payload.algorithm or "random_forest").lower()
 
-        # Resolve feature columns
+        # Resolve feature columns with case & whitespace resilience
         raw_features = payload.feature_columns or payload.features
         if isinstance(raw_features, str):
-            feature_cols = [c.strip() for c in raw_features.split(",") if c.strip()]
+            candidate_cols = [c.strip() for c in raw_features.split(",") if c.strip()]
         elif isinstance(raw_features, list) and len(raw_features) > 0:
-            feature_cols = [str(c).strip() for c in raw_features if str(c).strip()]
+            candidate_cols = [str(c).strip() for c in raw_features if str(c).strip()]
         else:
-            feature_cols = [c for c in df.columns if c != payload.target_column]
+            candidate_cols = [c for c in df.columns if c != target_col_clean]
 
-        missing = [c for c in feature_cols if c not in df.columns]
-        if missing:
-            raise ValueError(f"Feature columns not found: {missing}")
+        feature_cols = []
+        for c in candidate_cols:
+            c_low = str(c).strip().lower()
+            if c_low in col_lookup and col_lookup[c_low] != target_col_clean:
+                actual_name = col_lookup[c_low]
+                if actual_name not in feature_cols:
+                    feature_cols.append(actual_name)
+
+        if not feature_cols:
+            feature_cols = [c for c in df.columns if c != target_col_clean]
 
         # Auto-detect problem type if not supplied
         problem_type = (payload.problem_type or "").lower().strip()
         if not problem_type:
-            target_series = df[payload.target_column].dropna()
+            target_series = df[target_col_clean].dropna()
             if target_series.dtype == object or target_series.nunique() <= 10:
                 problem_type = "classification"
             else:
                 problem_type = "regression"
 
         x_raw = df[feature_cols].copy()
+        
+        # Clean missing values intelligently for high accuracy
+        num_cols_raw = x_raw.select_dtypes(include=np.number).columns
+        cat_cols_raw = x_raw.select_dtypes(exclude=np.number).columns
+        for col in num_cols_raw:
+            median_val = x_raw[col].median()
+            x_raw[col] = x_raw[col].fillna(median_val if not pd.isna(median_val) else 0.0)
+        for col in cat_cols_raw:
+            mode_series = x_raw[col].mode()
+            mode_val = mode_series[0] if not mode_series.empty else "unknown"
+            x_raw[col] = x_raw[col].fillna(mode_val)
+
         # Encode categorical features with one-hot encoding
-        x = pd.get_dummies(x_raw, drop_first=True).fillna(0)
-        y = df[payload.target_column]
+        x = pd.get_dummies(x_raw, drop_first=True, dtype=float).fillna(0.0)
+        y = df[target_col_clean].copy()
+
+        # Handle missing in target
+        if y.isna().any():
+            valid_idx = y.dropna().index
+            x = x.loc[valid_idx]
+            y = y.loc[valid_idx]
 
         # For classification, encode string labels
         label_encoder = None
-        if problem_type == "classification" and y.dtype == object:
-            label_encoder = LabelEncoder()
-            y = pd.Series(label_encoder.fit_transform(y), index=y.index)
+        if problem_type == "classification":
+            if y.dtype == object or str(y.dtype) == "category" or not np.issubdtype(y.dtype, np.number):
+                label_encoder = LabelEncoder()
+                y = pd.Series(label_encoder.fit_transform(y.astype(str)), index=y.index)
+            else:
+                # Numerical labels (e.g. 0, 1, 2)
+                label_encoder = LabelEncoder()
+                y = pd.Series(label_encoder.fit_transform(y), index=y.index)
+
+        # Stratify classification train/test split if each class has >= 2 samples
+        stratify_target = None
+        if problem_type == "classification" and len(y) > 0:
+            val_counts = y.value_counts()
+            if val_counts.min() >= 2:
+                stratify_target = y
 
         x_train, x_test, y_train, y_test = train_test_split(
-            x, y, test_size=payload.test_size, random_state=42
+            x, y, test_size=payload.test_size, random_state=42, stratify=stratify_target
         )
 
         # Scale features for algorithms that benefit from it
         scaler = None
         if algo in ("svm", "svc", "svr", "knn", "knn_classifier", "knn_regressor",
-                     "logistic_regression"):
+                     "logistic_regression", "linear_regression"):
             scaler = StandardScaler()
             x_train = pd.DataFrame(scaler.fit_transform(x_train), columns=x_train.columns, index=x_train.index)
             x_test = pd.DataFrame(scaler.transform(x_test), columns=x_test.columns, index=x_test.index)
@@ -168,6 +209,13 @@ class MLService:
             metrics["mse"] = float(mse)
             metrics["mae"] = float(mean_absolute_error(y_test, predictions))
             metrics["r2"] = float(r2_score(y_test, predictions))
+            residuals = y_test.values - predictions
+            metrics["residual_mean"] = float(round(float(np.mean(residuals)), 4))
+            metrics["residual_std"] = float(round(float(np.std(residuals)), 4))
+            metrics["scatter_preview"] = [
+                {"actual": float(round(float(a), 3)), "predicted": float(round(float(p), 3)), "residual": float(round(float(a - p), 3))}
+                for a, p in zip(y_test.values[:30], predictions[:30])
+            ]
 
         try:
             with mlflow.start_run(run_name=f"{algo}-{problem_type}"):
@@ -185,15 +233,30 @@ class MLService:
 
         # Real cross-validation
         cv_scores: list[float] = []
+        cv_mean: float | None = None
+        cv_std: float | None = None
         if payload.cross_validation:
             cv_metric = "accuracy" if problem_type == "classification" else "r2"
-            # If scaler was used, scale all data for CV
-            if scaler is not None:
-                x_scaled = pd.DataFrame(scaler.fit_transform(x), columns=x.columns, index=x.index)
-                cv_results = cross_val_score(model, x_scaled, y, cv=5, scoring=cv_metric)
-            else:
-                cv_results = cross_val_score(model, x, y, cv=5, scoring=cv_metric)
-            cv_scores = [float(s) for s in cv_results]
+            try:
+                from sklearn.model_selection import StratifiedKFold, KFold
+                if problem_type == "classification":
+                    min_class_count = int(y.value_counts().min()) if len(y) > 0 else 2
+                    n_splits = min(5, max(2, min_class_count))
+                    cv_split = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                else:
+                    cv_split = KFold(n_splits=5, shuffle=True, random_state=42)
+
+                # If scaler was used, scale all data for CV
+                if scaler is not None:
+                    x_scaled = pd.DataFrame(scaler.fit_transform(x), columns=x.columns, index=x.index)
+                    cv_results = cross_val_score(model, x_scaled, y, cv=cv_split, scoring=cv_metric)
+                else:
+                    cv_results = cross_val_score(model, x, y, cv=cv_split, scoring=cv_metric)
+                cv_scores = [float(round(s, 4)) for s in cv_results]
+                cv_mean = float(round(np.mean(cv_scores), 4))
+                cv_std = float(round(np.std(cv_scores), 4))
+            except Exception:
+                pass
 
         raw_name = payload.model_name or f"{algo}_{payload.dataset_id}"
         clean_name = raw_name.replace(".pkl", "").strip()
@@ -235,6 +298,10 @@ class MLService:
             "featuresUsed": list(x.columns),
             "cv_scores": cv_scores,
             "cvScores": cv_scores,
+            "cv_mean": cv_mean,
+            "cvMean": cv_mean,
+            "cv_std": cv_std,
+            "cvStd": cv_std,
             "best_params": best_params,
             "bestParams": best_params,
             "training_samples": len(x_train),
@@ -325,24 +392,66 @@ class MLService:
             raise ValueError("Dataset not found")
 
         df = self._load_dataframe(dataset.file_path)
-        if target_column not in df.columns:
-            raise ValueError(f"Target column '{target_column}' not found")
+        col_lookup = {str(c).strip().lower(): str(c).strip() for c in df.columns}
 
-        feat_cols = feature_columns or [c for c in df.columns if c != target_column]
-        x = pd.get_dummies(df[feat_cols].copy(), drop_first=True).fillna(0)
-        y = df[target_column]
+        target_raw = str(target_column).strip()
+        if target_raw.lower() not in col_lookup:
+            raise ValueError(f"Target column '{target_raw}' not found in dataset. Available: {list(df.columns)}")
+        target_col_clean = col_lookup[target_raw.lower()]
+
+        candidate_cols = feature_columns or [c for c in df.columns if c != target_col_clean]
+        feat_cols = []
+        for c in candidate_cols:
+            c_low = str(c).strip().lower()
+            if c_low in col_lookup and col_lookup[c_low] != target_col_clean:
+                actual_name = col_lookup[c_low]
+                if actual_name not in feat_cols:
+                    feat_cols.append(actual_name)
+
+        if not feat_cols:
+            feat_cols = [c for c in df.columns if c != target_col_clean]
+
+        x_raw = df[feat_cols].copy()
+
+        # Clean missing values intelligently
+        num_cols_raw = x_raw.select_dtypes(include=np.number).columns
+        cat_cols_raw = x_raw.select_dtypes(exclude=np.number).columns
+        for col in num_cols_raw:
+            median_val = x_raw[col].median()
+            x_raw[col] = x_raw[col].fillna(median_val if not pd.isna(median_val) else 0.0)
+        for col in cat_cols_raw:
+            mode_series = x_raw[col].mode()
+            mode_val = mode_series[0] if not mode_series.empty else "unknown"
+            x_raw[col] = x_raw[col].fillna(mode_val)
+
+        x = pd.get_dummies(x_raw, drop_first=True, dtype=float).fillna(0.0)
+        y = df[target_col_clean].copy()
+
+        if y.isna().any():
+            valid_idx = y.dropna().index
+            x = x.loc[valid_idx]
+            y = y.loc[valid_idx]
 
         label_encoder = None
-        if problem_type == "classification" and y.dtype == object:
+        if problem_type == "classification":
             label_encoder = LabelEncoder()
-            y = pd.Series(label_encoder.fit_transform(y), index=y.index)
+            y = pd.Series(label_encoder.fit_transform(y.astype(str)), index=y.index)
 
-        x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=test_size, random_state=42)
+        stratify_target = None
+        if problem_type == "classification" and len(y) > 0:
+            val_counts = y.value_counts()
+            if val_counts.min() >= 2:
+                stratify_target = y
+
+        x_train, x_test, y_train, y_test = train_test_split(
+            x, y, test_size=test_size, random_state=42, stratify=stratify_target
+        )
 
         if problem_type == "classification":
             algorithms = {
                 "random_forest": RandomForestClassifier(n_estimators=100, random_state=42),
                 "gradient_boosting": GradientBoostingClassifier(n_estimators=100, random_state=42),
+                "xgboost": GradientBoostingClassifier(n_estimators=150, learning_rate=0.1, max_depth=4, random_state=42),
                 "logistic_regression": LogisticRegression(max_iter=500, random_state=42),
                 "decision_tree": DecisionTreeClassifier(max_depth=10, random_state=42),
                 "knn": KNeighborsClassifier(n_neighbors=5),
@@ -352,11 +461,13 @@ class MLService:
             algorithms = {
                 "random_forest": RandomForestRegressor(n_estimators=100, random_state=42),
                 "gradient_boosting": GradientBoostingRegressor(n_estimators=100, random_state=42),
+                "xgboost": GradientBoostingRegressor(n_estimators=150, learning_rate=0.1, max_depth=4, random_state=42),
                 "linear_regression": LinearRegression(),
                 "decision_tree": DecisionTreeRegressor(max_depth=10, random_state=42),
                 "knn": KNeighborsRegressor(n_neighbors=5),
                 "svm": SVR(),
             }
+
 
         # Scale data for algorithms that need it
         scaler = StandardScaler()
@@ -550,12 +661,14 @@ class MLService:
             return pickle.load(file)
 
     def _load_dataframe(self, path: str) -> pd.DataFrame:
-
         suffix = Path(path).suffix.lower()
         if suffix == ".csv":
-            return pd.read_csv(path)
-        if suffix in {".xlsx", ".xls"}:
-            return pd.read_excel(path)
-        if suffix == ".json":
-            return pd.read_json(path)
-        raise ValueError("Unsupported dataset type for ML training")
+            df = pd.read_csv(path)
+        elif suffix in {".xlsx", ".xls"}:
+            df = pd.read_excel(path)
+        elif suffix == ".json":
+            df = pd.read_json(path)
+        else:
+            raise ValueError("Unsupported dataset type for ML training")
+        df.columns = [str(c).strip() for c in df.columns]
+        return df

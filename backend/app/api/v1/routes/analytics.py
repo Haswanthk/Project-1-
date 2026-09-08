@@ -80,7 +80,16 @@ def get_kpis(
 ):
     df = _try_load_df(dataset_id, db)
     if df is None:
-        return _MOCK_KPIS
+        return {
+            **_MOCK_KPIS,
+            "total_revenue": _MOCK_KPIS["revenue"]["value"],
+            "revenue_growth": f"+{_MOCK_KPIS['revenue']['change_pct']}%",
+            "active_users": _MOCK_KPIS["customers"]["value"],
+            "conversion_rate": _MOCK_KPIS["conversion_rate"]["value"],
+            "avg_order_value": _MOCK_KPIS["avg_order_value"]["value"],
+            "churn_rate": _MOCK_KPIS["churn_rate"]["value"],
+            "nps": _MOCK_KPIS["nps"]["value"],
+        }
 
     num_cols = df.select_dtypes(include=np.number).columns
     revenue = float(df[num_cols[0]].sum()) if len(num_cols) > 0 else 0.0
@@ -88,14 +97,18 @@ def get_kpis(
     churn = float(df[num_cols[1]].mean()) if len(num_cols) > 1 else 5.2
     aov = float(df[num_cols[2]].mean()) if len(num_cols) > 2 else (revenue / customers if customers > 0 else 0)
 
-    return {
+    res = {
         "revenue": {"value": revenue, "prev": revenue * 0.9, "change_pct": 10.5, "trend": "up"},
         "customers": {"value": customers, "prev": customers * 0.8, "change_pct": 25.0, "trend": "up"},
         "churn_rate": {"value": round(churn, 1), "prev": churn + 1.2, "change_pct": -1.2, "trend": "up"},
         "avg_order_value": {"value": round(aov, 2), "prev": round(aov * 0.95, 2), "change_pct": 5.2, "trend": "up"},
         "conversion_rate": {"value": 4.2, "prev": 3.8, "change_pct": 0.4, "trend": "up"},
         "nps": {"value": 72, "prev": 65, "change_pct": 7.0, "trend": "up"},
+        "total_revenue": revenue,
+        "revenue_growth": "+10.5%",
+        "active_users": customers,
     }
+    return res
 
 
 @router.get("/timeseries")
@@ -111,18 +124,37 @@ def get_timeseries(
         timestamps = _MOCK_TIMESERIES["timestamps"][-period:]
         values_key = metric if metric in _MOCK_TIMESERIES else "revenue"
         values = _MOCK_TIMESERIES[values_key][-period:]
-        return {"metric": metric, "period_days": period, "timestamps": timestamps, "values": values}
+        rev_vals = _MOCK_TIMESERIES["revenue"][-period:]
+        costs = [round(v * 0.42, 2) for v in rev_vals]
+        return {
+            "metric": metric,
+            "period_days": period,
+            "timestamps": timestamps,
+            "dates": timestamps,
+            "values": values,
+            "revenue": rev_vals,
+            "costs": costs,
+        }
 
     num_cols = df.select_dtypes(include=np.number).columns
     if not len(num_cols):
-        return {"metric": metric, "period_days": period, "timestamps": [], "values": []}
+        return {"metric": metric, "period_days": period, "timestamps": [], "dates": [], "values": [], "revenue": [], "costs": []}
 
     col = num_cols[0]
     vals = df[col].dropna().values
     n = min(period, len(vals))
     ts_vals = vals[-n:].tolist()
     timestamps = [f"Day {i+1}" for i in range(n)]
-    return {"metric": metric, "period_days": n, "timestamps": timestamps, "values": ts_vals}
+    costs = [round(float(v) * 0.42, 2) for v in ts_vals]
+    return {
+        "metric": metric,
+        "period_days": n,
+        "timestamps": timestamps,
+        "dates": timestamps,
+        "values": ts_vals,
+        "revenue": ts_vals,
+        "costs": costs,
+    }
 
 
 @router.get("/segments")
@@ -204,12 +236,86 @@ def get_regions(
         return []
 
     grouped = df.groupby(cat_cols[col_idx])[num_cols[0]].sum().sort_values(ascending=False).head(5)
+    total_val = float(grouped.sum()) if grouped.sum() > 0 else 1.0
     return [
         {
             "region": str(k),
+            "name": str(k),
             "revenue": float(v),
             "customers": int(v / 50),
             "growth_pct": 8.0,
+            "percentage": round((float(v) / total_val) * 100, 1),
+            "share": round((float(v) / total_val) * 100, 1),
         }
         for k, v in grouped.items()
     ]
+
+
+_MOCK_COHORTS = [
+    {"cohort": "2026-03", "size": 1240, "retention": [100.0, 72.4, 61.2, 54.8, 49.3, 46.1, 44.0]},
+    {"cohort": "2026-04", "size": 1450, "retention": [100.0, 74.1, 63.5, 57.0, 52.1, 48.9]},
+    {"cohort": "2026-05", "size": 1680, "retention": [100.0, 76.8, 66.2, 59.4, 55.0]},
+    {"cohort": "2026-06", "size": 1890, "retention": [100.0, 79.2, 68.9, 62.1]},
+    {"cohort": "2026-07", "size": 2150, "retention": [100.0, 81.5, 71.0]},
+    {"cohort": "2026-08", "size": 2480, "retention": [100.0, 83.2]},
+    {"cohort": "2026-09", "size": 2720, "retention": [100.0]},
+]
+
+
+@router.get("/cohorts")
+def get_cohorts(_: object = Depends(get_current_user)):
+    """Return cohort retention matrix."""
+    return _MOCK_COHORTS
+
+
+@router.get("/dataset-insights/{dataset_id}")
+def get_dataset_insights(dataset_id: int, db: Session = Depends(get_db), _: object = Depends(get_current_user)):
+    """Return deep statistical insights, correlation matrix and numeric distributions for a dataset."""
+    df = _try_load_df(dataset_id, db)
+    if df is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    num_cols = df.select_dtypes(include=np.number).columns.tolist()
+    cat_cols = df.select_dtypes(exclude=np.number).columns.tolist()
+
+    stats = {}
+    distributions = {}
+    for col in num_cols[:8]:
+        s = df[col].dropna()
+        if len(s) > 0:
+            stats[col] = {
+                "mean": round(float(s.mean()), 3),
+                "std": round(float(s.std()), 3) if len(s) > 1 else 0.0,
+                "min": round(float(s.min()), 3),
+                "max": round(float(s.max()), 3),
+                "median": round(float(s.median()), 3),
+                "q25": round(float(s.quantile(0.25)), 3),
+                "q75": round(float(s.quantile(0.75)), 3),
+                "missing": int(df[col].isna().sum()),
+            }
+            # 10-bin histogram
+            counts, bin_edges = np.histogram(s, bins=min(10, len(s.unique())))
+            distributions[col] = {
+                "bins": [f"{round(bin_edges[i], 1)}-{round(bin_edges[i+1], 1)}" for i in range(len(counts))],
+                "counts": counts.tolist(),
+            }
+
+    correlations = {}
+    if len(num_cols) >= 2:
+        corr_matrix = df[num_cols[:8]].corr().fillna(0).round(3)
+        correlations = {
+            "columns": num_cols[:8],
+            "matrix": [[float(val) for val in row] for row in corr_matrix.values],
+        }
+
+    return {
+        "dataset_id": dataset_id,
+        "rows": len(df),
+        "columns": len(df.columns),
+        "numeric_columns": num_cols,
+        "categorical_columns": cat_cols,
+        "summary_statistics": stats,
+        "distributions": distributions,
+        "correlations": correlations,
+    }
+
