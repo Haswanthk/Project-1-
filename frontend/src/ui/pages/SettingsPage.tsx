@@ -114,8 +114,8 @@ export function SettingsPage() {
     <div className="animate-fade-in-up stagger-1 p-6 space-y-8 max-w-4xl mx-auto mb-20">
       <header className="flex justify-between items-end border-b border-[var(--c-border)] pb-4">
         <div>
-          <h1 className="section-title text-2xl font-bold">Settings</h1>
-          <p className="section-subtitle text-sm text-[var(--c-text-secondary)] mt-1">Manage workspace preferences, integrations, and application settings.</p>
+          <h1 className="text-2xl font-bold text-[var(--c-text-primary)]">Settings</h1>
+          <p className="text-sm text-[var(--c-text-secondary)] mt-1">Manage workspace preferences, integrations, and application settings.</p>
         </div>
         <div className="flex gap-3">
           <button onClick={handleLogout} className="btn btn-ghost text-red-400 hover:bg-red-500/10 px-4 py-2 rounded-md flex items-center gap-2">
@@ -129,7 +129,7 @@ export function SettingsPage() {
 
       {/* Appearance Section */}
       <section className="glass-card p-6 rounded-xl">
-        <h2 className="text-lg font-semibold mb-6 flex items-center gap-2">
+        <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 text-[var(--c-text-primary)]">
           <Palette className="w-5 h-5 text-[var(--c-text-secondary)]" />
           Appearance
         </h2>
@@ -172,7 +172,7 @@ export function SettingsPage() {
 
       {/* AI Providers Section */}
       <section className="glass-card p-6 rounded-xl">
-        <h2 className="text-lg font-semibold mb-6 flex items-center gap-2">
+        <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 text-[var(--c-text-primary)]">
           <Key className="w-5 h-5 text-[var(--c-text-secondary)]" />
           AI Providers
         </h2>
@@ -185,9 +185,9 @@ export function SettingsPage() {
         ) : (
           <div className="space-y-4">
             {providers.map((provider, i) => (
-              <div key={provider.id || i} className="p-4 border border-[var(--c-border)] rounded-lg bg-[var(--c-bg)]">
+              <div key={provider.id || i} className="p-4 border border-[var(--c-border)] rounded-lg bg-[var(--c-bg-secondary)]">
                 <div className="flex items-center justify-between mb-3">
-                  <div className="font-medium">{provider.name}</div>
+                  <div className="font-medium text-[var(--c-text-primary)]">{provider.name}</div>
                   <label className="relative inline-flex items-center cursor-pointer">
                     <input 
                       type="checkbox" 
@@ -225,7 +225,7 @@ export function SettingsPage() {
 
       {/* API Configuration Section */}
       <section className="glass-card p-6 rounded-xl">
-        <h2 className="text-lg font-semibold mb-6 flex items-center gap-2">
+        <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 text-[var(--c-text-primary)]">
           <Server className="w-5 h-5 text-[var(--c-text-secondary)]" />
           API Configuration
         </h2>
@@ -240,7 +240,7 @@ export function SettingsPage() {
             <label className="form-label block text-sm font-medium mb-1">Backend Base URL</label>
             <input
               type="text"
-              className="form-input w-full p-2 rounded-md border border-[var(--c-border)] bg-[var(--c-bg)] font-mono text-sm"
+              className="form-input w-full p-2 rounded-md border border-[var(--c-border)] bg-[var(--c-bg-secondary)] font-mono text-sm"
               value={apiBaseUrl}
               onChange={(e) => setApiBaseUrl(e.target.value)}
             />
@@ -250,7 +250,7 @@ export function SettingsPage() {
             <label className="form-label block text-sm font-medium mb-1">CORS Allowed Origins</label>
             <input
               type="text"
-              className="form-input w-full p-2 rounded-md border border-[var(--c-border)] bg-[var(--c-bg)] font-mono text-sm"
+              className="form-input w-full p-2 rounded-md border border-[var(--c-border)] bg-[var(--c-bg-secondary)] font-mono text-sm"
               value={corsOrigin}
               onChange={(e) => setCorsOrigin(e.target.value)}
             />

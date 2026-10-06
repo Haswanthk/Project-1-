@@ -100,7 +100,7 @@ export function PredictionsPage() {
               <select
                 value={selectedModel}
                 onChange={e => loadModelDetails(e.target.value)}
-                className="form-select font-medium text-indigo-300"
+                className="form-select font-medium text-[var(--c-accent)]"
               >
                 <option value="">Select model...</option>
                 {models.map((m: any) => (
@@ -112,8 +112,8 @@ export function PredictionsPage() {
             </div>
 
             {modelFeatures.length > 0 && (
-              <div className="p-3 rounded-xl bg-indigo-500/8 border border-indigo-500/15 text-xs text-slate-300">
-                <span className="font-semibold text-indigo-400 block mb-1 flex items-center gap-1.5">
+              <div className="p-3 rounded-xl bg-[var(--c-accent-light)] border border-[var(--c-accent)]/15 text-xs text-[var(--c-text-secondary)]">
+                <span className="font-semibold text-[var(--c-accent)] block mb-1 flex items-center gap-1.5">
                   <Info className="size-3.5" /> Required Features ({modelFeatures.length}):
                 </span>
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -178,7 +178,7 @@ export function PredictionsPage() {
                       <CheckCircle className="size-6 text-emerald-400 shrink-0" />
                       <div>
                         <p className="text-xs text-emerald-300 font-medium">Prediction Output</p>
-                        <p className="text-xl font-bold text-white">
+                        <p className="text-xl font-bold text-[var(--c-text-primary)]">
                           {result.predicted_label || result.prediction}
                         </p>
                       </div>
@@ -192,10 +192,10 @@ export function PredictionsPage() {
                             <div key={cls} className="space-y-1">
                               <div className="flex justify-between text-xs">
                                 <span>Class {cls}</span>
-                                <span className="text-indigo-400 font-semibold">{((prob as number) * 100).toFixed(1)}%</span>
+                                <span className="text-[var(--c-accent)] font-semibold">{((prob as number) * 100).toFixed(1)}%</span>
                               </div>
                               <div className="h-1.5 rounded-full bg-[var(--c-bg-tertiary)] overflow-hidden">
-                                <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${(prob as number) * 100}%` }} />
+                                <div className="h-full bg-[var(--c-accent)] rounded-full" style={{ width: `${(prob as number) * 100}%` }} />
                               </div>
                             </div>
                           ))}
@@ -204,8 +204,8 @@ export function PredictionsPage() {
                     )}
 
                     <details className="text-xs text-[var(--c-text-muted)]">
-                      <summary className="cursor-pointer hover:text-white">Raw JSON Response</summary>
-                      <pre className="mt-2 p-3 rounded-lg bg-black/40 text-[11px] font-mono overflow-x-auto">
+                      <summary className="cursor-pointer hover:text-[var(--c-text-primary)]">Raw JSON Response</summary>
+                      <pre className="mt-2 p-3 rounded-lg bg-[var(--c-bg-tertiary)] text-[11px] font-mono overflow-x-auto text-[var(--c-text-secondary)]">
                         {JSON.stringify(result, null, 2)}
                       </pre>
                     </details>

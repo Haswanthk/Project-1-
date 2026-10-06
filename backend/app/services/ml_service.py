@@ -61,6 +61,30 @@ _PARAM_GRIDS: dict[str, dict[str, list]] = {
 }
 
 
+def _to_json_safe(obj: Any) -> Any:
+    """Recursively convert numpy/pandas types to native Python JSON-serializable types."""
+    if isinstance(obj, dict):
+        return {str(k): _to_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple, set)):
+        return [_to_json_safe(item) for item in obj]
+    elif isinstance(obj, np.ndarray):
+        return [_to_json_safe(item) for item in obj.tolist()]
+    elif isinstance(obj, (np.integer,)):
+        return int(obj)
+    elif isinstance(obj, (np.floating,)):
+        val = float(obj)
+        if np.isnan(val) or np.isinf(val):
+            return None
+        return val
+    elif isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    elif isinstance(obj, float):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return obj
+    return obj
+
+
 class MLService:
     def __init__(self, db: Session):
         self.db = db

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Bell,
@@ -29,9 +29,12 @@ import {
   Menu,
   X,
   Search,
+  Sun,
+  Moon,
 } from 'lucide-react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../state/authStore'
+import { CommandPalette } from '../components/ui/CommandPalette'
 
 type NavItem = { to: string; label: string; icon: React.ComponentType<{ className?: string }> }
 type NavGroup = { group: string; items: NavItem[] }
@@ -89,6 +92,40 @@ export function AppShell() {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
 
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    const saved = localStorage.getItem('theme')
+    return saved === 'light' ? 'light' : 'dark'
+  })
+
+  // Sync theme class on mount and when changed
+  useEffect(() => {
+    if (theme === 'light') {
+      document.documentElement.classList.add('light')
+    } else {
+      document.documentElement.classList.remove('light')
+    }
+  }, [theme])
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    localStorage.setItem('theme', next)
+  }
+
+  const [commandOpen, setCommandOpen] = useState(false)
+
+  // Listen globally for Cmd+K / Ctrl+K
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setCommandOpen(prev => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   const handleLogout = () => {
     clearAuth()
     navigate('/login')
@@ -106,8 +143,8 @@ export function AppShell() {
             collapsed ? 'justify-center' : ''
           } ${
             isActive
-              ? 'bg-gradient-to-r from-indigo-500/15 to-violet-500/10 text-white border border-indigo-500/20 shadow-sm shadow-indigo-500/10'
-              : 'text-slate-400 hover:bg-white/[0.04] hover:text-white'
+              ? 'bg-[var(--c-accent-light)] text-[var(--c-text-primary)] border border-[var(--c-border-strong)]'
+              : 'text-[var(--c-text-muted)] hover:bg-[var(--c-bg-hover)] hover:text-[var(--c-text-primary)]'
           }`
         }
       >
@@ -116,7 +153,7 @@ export function AppShell() {
             {isActive && (
               <motion.div
                 layoutId="nav-active-pill"
-                className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full bg-indigo-400"
+                className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full bg-[var(--c-accent)]"
                 transition={{ type: 'spring', stiffness: 350, damping: 30 }}
               />
             )}
@@ -132,7 +169,7 @@ export function AppShell() {
     <div className="flex flex-col h-full">
       {/* Logo */}
       <div className={`flex items-center gap-3 px-4 py-5 ${collapsed ? 'justify-center' : ''}`}>
-        <div className="p-2 rounded-xl bg-gradient-to-br from-indigo-600/30 to-violet-600/20 border border-indigo-500/25 text-indigo-300 shrink-0">
+        <div className="p-2 rounded-xl bg-[var(--c-accent-light)] border border-[var(--c-border)] text-[var(--c-accent)] shrink-0">
           <LayoutDashboard className="size-5" />
         </div>
         <AnimatePresence>
@@ -144,21 +181,25 @@ export function AppShell() {
               transition={{ duration: 0.2 }}
               className="overflow-hidden"
             >
-              <h1 className="text-sm font-bold text-white tracking-tight leading-tight whitespace-nowrap">Enterprise AI</h1>
-              <p className="text-[10px] text-slate-500 whitespace-nowrap">Analytics Platform</p>
+              <h1 className="text-sm font-bold text-[var(--c-text-primary)] tracking-tight leading-tight whitespace-nowrap">Enterprise AI</h1>
+              <p className="text-[10px] text-[var(--c-text-muted)] whitespace-nowrap">Analytics Platform</p>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
-      {/* Search */}
+      {/* Interactive Command Search */}
       {!collapsed && (
         <div className="px-3 mb-3">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.06] text-slate-500 text-xs">
-            <Search className="size-3.5" />
-            <span>Search...</span>
-            <kbd className="ml-auto px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] font-mono text-slate-600">⌘K</kbd>
-          </div>
+          <button
+            type="button"
+            onClick={() => setCommandOpen(true)}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-[var(--c-bg-secondary)] border border-[var(--c-border)] text-[var(--c-text-muted)] text-xs hover:border-[var(--c-accent)]/50 hover:bg-[var(--c-bg-hover)] transition-all cursor-pointer group"
+          >
+            <Search className="size-3.5 text-[var(--c-text-muted)] group-hover:text-[var(--c-accent)] transition-colors" />
+            <span className="group-hover:text-[var(--c-text-primary)] transition-colors">Command Search...</span>
+            <kbd className="ml-auto px-1.5 py-0.5 rounded bg-[var(--c-bg-tertiary)] border border-[var(--c-border)] text-[10px] font-mono text-[var(--c-text-muted)] group-hover:text-[var(--c-accent)]">⌘K</kbd>
+          </button>
         </div>
       )}
 
@@ -167,11 +208,11 @@ export function AppShell() {
         {NAV_GROUPS.map(group => (
           <div key={group.group}>
             {!collapsed && (
-              <p className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.12em] px-3 mb-2">
+              <p className="text-[10px] font-bold text-[var(--c-text-muted)] uppercase tracking-[0.12em] px-3 mb-2">
                 {group.group}
               </p>
             )}
-            {collapsed && <div className="h-px bg-white/[0.04] my-2" />}
+            {collapsed && <div className="h-px bg-[var(--c-border)] my-2" />}
             <div className="space-y-0.5">
               {group.items.map(item => (
                 <NavItemLink key={item.to} item={item} />
@@ -182,22 +223,22 @@ export function AppShell() {
       </nav>
 
       {/* User section */}
-      <div className={`mt-auto pt-3 border-t border-white/[0.06] px-3 pb-4 space-y-2 ${collapsed ? 'flex flex-col items-center' : ''}`}>
+      <div className={`mt-auto pt-3 border-t border-[var(--c-border)] px-3 pb-4 space-y-2 ${collapsed ? 'flex flex-col items-center' : ''}`}>
         {!collapsed && user && (
-          <div className="flex items-center gap-3 px-2 py-2 rounded-xl bg-white/[0.03] mb-2">
+          <div className="flex items-center gap-3 px-2 py-2 rounded-xl bg-[var(--c-bg-secondary)] mb-2">
             <div className="size-8 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
               {user.full_name?.charAt(0)?.toUpperCase() || 'U'}
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-semibold text-white truncate">{user.full_name || 'User'}</p>
-              <p className="text-[10px] text-slate-500 truncate">{user.email || ''}</p>
+              <p className="text-xs font-semibold text-[var(--c-text-primary)] truncate">{user.full_name || 'User'}</p>
+              <p className="text-[10px] text-[var(--c-text-muted)] truncate">{user.email || ''}</p>
             </div>
           </div>
         )}
         <button
           onClick={handleLogout}
           title={collapsed ? 'Sign Out' : undefined}
-          className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-xs font-semibold text-rose-400 hover:bg-rose-500/10 transition-all duration-200 ${collapsed ? 'justify-center' : ''}`}
+          className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 transition-all duration-200 ${collapsed ? 'justify-center' : ''}`}
         >
           <LogOut className="size-4 shrink-0" />
           {!collapsed && 'Sign Out'}
@@ -212,13 +253,13 @@ export function AppShell() {
       <motion.aside
         animate={{ width: collapsed ? 68 : 260 }}
         transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className="hidden md:flex flex-col shrink-0 border-r border-white/[0.06] bg-[#060B18]/95 backdrop-blur-2xl sticky top-0 h-screen overflow-hidden"
+        className="hidden md:flex flex-col shrink-0 border-r border-[var(--c-border)] bg-[var(--c-bg-elevated)] backdrop-blur-2xl sticky top-0 h-screen overflow-hidden"
       >
         <SidebarContent />
         {/* Collapse toggle */}
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="absolute top-5 -right-3 w-6 h-6 rounded-full bg-slate-800 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white hover:bg-indigo-600 transition-all duration-200 z-10 shadow-lg"
+          className="absolute top-5 -right-3 w-6 h-6 rounded-full bg-[var(--c-bg-elevated)] border border-[var(--c-border-strong)] flex items-center justify-center text-[var(--c-text-muted)] hover:text-white hover:bg-[var(--c-accent)] transition-all duration-200 z-10 shadow-lg"
         >
           {collapsed ? <ChevronRight className="size-3" /> : <ChevronLeft className="size-3" />}
         </button>
@@ -232,7 +273,7 @@ export function AppShell() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
               onClick={() => setMobileOpen(false)}
             />
             <motion.aside
@@ -240,11 +281,11 @@ export function AppShell() {
               animate={{ x: 0 }}
               exit={{ x: -280 }}
               transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-              className="relative w-[260px] h-full bg-[#060B18] border-r border-white/[0.06] z-50 overflow-y-auto"
+              className="relative w-[260px] h-full bg-[var(--c-bg-elevated)] border-r border-[var(--c-border)] z-50 overflow-y-auto"
             >
               <button
                 onClick={() => setMobileOpen(false)}
-                className="absolute top-4 right-3 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition z-10"
+                className="absolute top-4 right-3 p-1.5 rounded-lg text-[var(--c-text-muted)] hover:text-[var(--c-text-primary)] hover:bg-[var(--c-bg-hover)] transition z-10"
               >
                 <X className="size-4" />
               </button>
@@ -257,23 +298,23 @@ export function AppShell() {
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top header */}
-        <header className="sticky top-0 z-30 flex items-center justify-between px-5 py-3.5 border-b border-white/[0.06] bg-[var(--c-bg-body)]/80 backdrop-blur-xl">
+        <header className="sticky top-0 z-30 flex items-center justify-between px-5 py-3.5 border-b border-[var(--c-border)] bg-[var(--c-bg-body)]/80 backdrop-blur-xl">
           <div className="flex items-center gap-3">
             <button
-              className="md:hidden p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/[0.06] transition"
+              className="md:hidden p-2 rounded-xl text-[var(--c-text-muted)] hover:text-[var(--c-text-primary)] hover:bg-[var(--c-bg-hover)] transition"
               onClick={() => setMobileOpen(true)}
             >
               <Menu className="size-5" />
             </button>
             <div className="hidden sm:block">
-              <h2 className="text-sm font-bold text-white tracking-tight">Enterprise Analytics Workspace</h2>
-              <p className="text-[11px] text-slate-500">Production-grade orchestration, ML, and AI copilot</p>
+              <h2 className="text-sm font-bold text-[var(--c-text-primary)] tracking-tight">Enterprise Analytics Workspace</h2>
+              <p className="text-[11px] text-[var(--c-text-muted)]">Production-grade orchestration, ML, and AI copilot</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2.5">
             {/* Live indicator */}
-            <div className="hidden sm:flex items-center gap-2 text-xs text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/15">
+            <div className="hidden sm:flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/15">
               <span className="relative flex size-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                 <span className="relative inline-flex rounded-full size-2 bg-emerald-400" />
@@ -282,14 +323,27 @@ export function AppShell() {
             </div>
             <button
               onClick={() => navigate('/notifications')}
-              className="relative p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/[0.06] transition"
+              className="relative p-2 rounded-xl text-[var(--c-text-muted)] hover:text-[var(--c-text-primary)] hover:bg-[var(--c-bg-hover)] transition"
             >
               <Bell className="size-[18px]" />
               <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-rose-500 border border-[var(--c-bg-body)]" />
             </button>
+            {/* Theme Toggle Button */}
+            <button
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              className="p-2 rounded-xl text-[var(--c-text-muted)] hover:text-[var(--c-text-primary)] hover:bg-[var(--c-bg-hover)] transition flex items-center justify-center"
+              aria-label="Toggle Theme"
+            >
+              {theme === 'dark' ? (
+                <Sun className="size-[18px] text-amber-400" />
+              ) : (
+                <Moon className="size-[18px] text-indigo-500" />
+              )}
+            </button>
             <button
               onClick={() => navigate('/settings')}
-              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/[0.06] transition"
+              className="p-2 rounded-xl text-[var(--c-text-muted)] hover:text-[var(--c-text-primary)] hover:bg-[var(--c-bg-hover)] transition"
             >
               <Settings className="size-[18px]" />
             </button>
@@ -321,6 +375,14 @@ export function AppShell() {
           </div>
         </main>
       </div>
+
+      {/* Global Command Center (Cmd+K / Ctrl+K) */}
+      <CommandPalette
+        isOpen={commandOpen}
+        onClose={() => setCommandOpen(false)}
+        currentTheme={theme}
+        onToggleTheme={toggleTheme}
+      />
     </div>
   )
 }
