@@ -107,8 +107,10 @@ for _i in range(60):
 
 def _generate_event() -> dict[str, Any]:
     template = random.choice(_EVENT_TEMPLATES)
+    evt_id = f"evt-{uuid.uuid4().hex[:8]}"
     return {
-        "event_id": f"evt-{uuid.uuid4().hex[:8]}",
+        "id": evt_id,
+        "event_id": evt_id,
         "topic": template["topic"],
         "partition": random.randint(0, 7),
         "offset": random.randint(1_000_000, 9_999_999),
@@ -126,6 +128,13 @@ class ProduceEventRequest(BaseModel):
     key: str = ""
     payload: dict[str, Any]
     partition: int | None = None
+
+
+class CreateTopicRequest(BaseModel):
+    name: str
+    partitions: int = 4
+    replication_factor: int = 2
+    description: str = ""
 
 
 @router.get("/events")
@@ -151,8 +160,10 @@ def get_streaming_events(count: int = 20, topic: str = "", _: object = Depends(g
 def produce_event(body: ProduceEventRequest, _: object = Depends(get_current_user)):
     """Publish a real synthetic or custom message to a Kafka topic."""
     global _recent_events
+    evt_id = f"evt-{uuid.uuid4().hex[:8]}"
     event = {
-        "event_id": f"evt-{uuid.uuid4().hex[:8]}",
+        "id": evt_id,
+        "event_id": evt_id,
         "topic": body.topic,
         "partition": body.partition if body.partition is not None else random.randint(0, 5),
         "offset": random.randint(10_000_000, 99_999_999),
@@ -188,6 +199,24 @@ def list_topics(_: object = Depends(get_current_user)):
         )
         topic["messages_per_sec"] = round(topic["messages_per_min"] / 60, 1)
     return _TOPICS
+
+
+@router.post("/topics")
+def create_topic(body: CreateTopicRequest, _: object = Depends(get_current_user)):
+    """Create a new simulated topic."""
+    new_topic = {
+        "id": f"topic-{uuid.uuid4().hex[:6]}",
+        "name": body.name,
+        "partitions": body.partitions,
+        "replication_factor": body.replication_factor,
+        "messages_per_min": 0,
+        "messages_per_sec": 0,
+        "retention_hours": 72,
+        "status": "active",
+        "description": body.description or f"Custom topic {body.name}",
+    }
+    _TOPICS.insert(0, new_topic)
+    return new_topic
 
 
 @router.get("/throughput")

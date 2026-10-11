@@ -1,7 +1,7 @@
 import requests
 import json
 
-BASE = 'http://127.0.0.1:8000'
+BASE = 'http://127.0.0.1:8000/api/v1'
 
 # Authenticate
 auth_res = requests.post(f'{BASE}/auth/login', json={'email': 'admin@enterprise.ai', 'password': 'Admin1234!'})
@@ -44,8 +44,8 @@ if t_res.status_code == 200:
     data = t_res.json()
     metrics = data.get('metrics', {})
     print(f" Accuracy: {metrics.get('accuracy')}")
-    print(f" 5-Fold CV Mean: {metrics.get('cv_mean')}")
-    print(f" Feature Importance: {list(metrics.get('feature_importance', {}).keys())}")
+    print(f" 5-Fold CV Mean: {data.get('cv_mean') or data.get('cvMean')}")
+    print(f" Feature Importance: {list(data.get('feature_importance', {}).keys())}")
     
     # Test Prediction
     model_art = data.get('model_name') or 'rf_iris_verified.pkl'
@@ -91,8 +91,11 @@ comp_res = requests.post(f'{BASE}/ml/compare', json={
 }, headers=headers)
 print("Benchmark Status Code:", comp_res.status_code)
 if comp_res.status_code == 200:
-    models = comp_res.json().get('models', [])
-    for m in models:
-        print(f" > Model: {m.get('algorithm')} | Accuracy: {m.get('accuracy')} | Time: {m.get('train_time')}s")
+    comparisons = comp_res.json().get('comparisons', [])
+    best = comp_res.json().get('best_algorithm')
+    print(f" Best Algorithm: {best}")
+    for m in comparisons:
+        metrics = m.get('metrics', {})
+        print(f" > {m.get('algorithm')} | Accuracy: {metrics.get('accuracy', 'N/A')} | Status: {m.get('status')}")
 else:
     print("Benchmark Error:", comp_res.text)

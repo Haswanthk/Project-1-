@@ -69,6 +69,11 @@ export function StreamingPage() {
   const [newTopicName, setNewTopicName] = useState('')
   const [newTopicPartitions, setNewTopicPartitions] = useState(4)
 
+  const topicsRef = useRef(topics)
+  useEffect(() => {
+    topicsRef.current = topics
+  }, [topics])
+
   const fetchData = async () => {
     try {
       const [s, t, tp, g, ev] = await Promise.allSettled([
@@ -80,14 +85,27 @@ export function StreamingPage() {
       ])
       if (s.status === 'fulfilled') setSummary(s.value.data)
       if (t.status === 'fulfilled') {
-        setTopics(t.value.data)
-        if (t.value.data.length > 0 && !produceTopic) {
-          setProduceTopic(t.value.data[0].name)
+        const topicsList = Array.isArray(t.value.data)
+          ? t.value.data
+          : (t.value.data?.topics ?? [])
+        setTopics(topicsList)
+        if (topicsList.length > 0 && !produceTopic) {
+          setProduceTopic(topicsList[0].name)
         }
       }
       if (tp.status === 'fulfilled') setThroughput(tp.value.data)
-      if (g.status === 'fulfilled') setGroups(g.value.data)
-      if (ev.status === 'fulfilled') setRecentEvents(ev.value.data || [])
+      if (g.status === 'fulfilled') {
+        const groupsList = Array.isArray(g.value.data)
+          ? g.value.data
+          : (g.value.data?.consumer_groups ?? (g.value.data?.groups ?? []))
+        setGroups(Array.isArray(groupsList) ? groupsList : [])
+      }
+      if (ev.status === 'fulfilled') {
+        const eventsList = Array.isArray(ev.value.data)
+          ? ev.value.data
+          : (ev.value.data?.events ?? [])
+        setRecentEvents(eventsList)
+      }
     } catch (e) {
       console.error(e)
     } finally {
@@ -108,8 +126,9 @@ export function StreamingPage() {
         try {
           const keys = Object.keys(SAMPLE_PAYLOADS)
           const randomSample = keys[Math.floor(Math.random() * keys.length)]
-          const targetTopic = topics.length > 0
-            ? topics[Math.floor(Math.random() * topics.length)].name
+          const currentTopics = topicsRef.current
+          const targetTopic = currentTopics.length > 0
+            ? currentTopics[Math.floor(Math.random() * currentTopics.length)].name
             : 'events.transactions'
 
           await apiClient.post('/streaming/produce', {
@@ -128,7 +147,7 @@ export function StreamingPage() {
     return () => {
       if (autoStreamRef.current) clearInterval(autoStreamRef.current)
     }
-  }, [autoStreaming, topics])
+  }, [autoStreaming])
 
   const handleProduceEvent = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
@@ -221,7 +240,9 @@ export function StreamingPage() {
   } : null
 
   // Filtered Events
-  const filteredEvents = recentEvents.filter((ev: any) => {
+  const eventsList = Array.isArray(recentEvents) ? recentEvents : []
+  const filteredEvents = eventsList.filter((ev: any) => {
+    if (!ev) return false
     const matchTopic = selectedTopicFilter === 'all' || ev.topic === selectedTopicFilter
     const matchSearch =
       !searchFilter ||
@@ -380,7 +401,7 @@ export function StreamingPage() {
                   onChange={e => setProduceTopic(e.target.value)}
                   className="form-select text-xs w-full rounded-xl py-2 px-3 bg-[var(--c-bg-tertiary)] border-[var(--c-border)]"
                 >
-                  {topics.map((t: any) => (
+                  {(Array.isArray(topics) ? topics : []).map((t: any) => (
                     <option key={t.name} value={t.name}>
                       {t.name}
                     </option>
@@ -448,7 +469,7 @@ export function StreamingPage() {
                 className="form-select text-xs py-1 px-2.5 rounded-lg bg-[var(--c-bg-tertiary)] border-[var(--c-border)]"
               >
                 <option value="all">All Topics</option>
-                {topics.map((t: any) => (
+                {(Array.isArray(topics) ? topics : []).map((t: any) => (
                   <option key={t.name} value={t.name}>{t.name}</option>
                 ))}
               </select>
@@ -473,12 +494,13 @@ export function StreamingPage() {
                 No events in current buffer. Send an event from the producer console!
               </div>
             ) : (
-              filteredEvents.map((ev: any) => {
-                const isExpanded = expandedEventId === ev.id
+              filteredEvents.map((ev: any, idx: number) => {
+                const eventId = ev.id || ev.event_id || `evt-${idx}-${ev.timestamp || Date.now()}`
+                const isExpanded = expandedEventId === eventId
                 return (
                   <div
-                    key={ev.id}
-                    onClick={() => setExpandedEventId(isExpanded ? null : ev.id)}
+                    key={eventId}
+                    onClick={() => setExpandedEventId(isExpanded ? null : eventId)}
                     className="p-3 rounded-xl bg-[var(--c-bg-tertiary)]/60 border border-[var(--c-border)] hover:border-slate-600 transition-all cursor-pointer"
                   >
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -489,7 +511,7 @@ export function StreamingPage() {
                         <span className="font-mono text-slate-400">key: {ev.key}</span>
                       </div>
                       <span className="text-[11px] text-slate-500 font-mono">
-                        {new Date(ev.timestamp).toLocaleTimeString()}
+                        {ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : 'now'}
                       </span>
                     </div>
 
@@ -509,7 +531,7 @@ export function StreamingPage() {
                         <div className="mt-1.5 flex justify-between text-[10px] text-slate-500 font-mono">
                           <span>Partition: {ev.partition ?? 0}</span>
                           <span>Offset: {ev.offset ?? '—'}</span>
-                          <span>Event ID: {ev.id}</span>
+                          <span>Event ID: {eventId}</span>
                         </div>
                       </motion.div>
                     )}
@@ -531,9 +553,9 @@ export function StreamingPage() {
           </div>
 
           <div className="space-y-2.5 max-h-[320px] overflow-y-auto">
-            {topics.map((t: any, i: number) => (
+            {(Array.isArray(topics) ? topics : []).map((t: any, i: number) => (
               <div
-                key={i}
+                key={t.id || t.name || i}
                 className="flex items-center justify-between p-3 rounded-xl bg-[var(--c-bg-tertiary)]/40 border border-[var(--c-border)]"
               >
                 <div>
@@ -561,12 +583,12 @@ export function StreamingPage() {
           </div>
 
           <div className="space-y-2.5 max-h-[320px] overflow-y-auto">
-            {groups.map((g: any, i: number) => {
+            {(Array.isArray(groups) ? groups : []).map((g: any, i: number) => {
               const lag = g.lag || 0
               const isHighLag = lag > 150
               return (
                 <div
-                  key={i}
+                  key={g.id || g.name || i}
                   className="flex items-center justify-between p-3 rounded-xl bg-[var(--c-bg-tertiary)]/40 border border-[var(--c-border)]"
                 >
                   <div>

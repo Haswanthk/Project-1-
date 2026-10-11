@@ -3,6 +3,17 @@ import { Bell, Check, AlertTriangle, Info, AlertOctagon, RefreshCw } from 'lucid
 import { GlassCard } from '../components/ui/GlassCard'
 import { apiClient } from '../lib/api'
 
+type NotificationRaw = {
+  id: number
+  title: string
+  message: string
+  severity?: 'info' | 'warning' | 'error'
+  type?: string
+  timestamp?: string
+  created_at?: string
+  read: boolean
+}
+
 type Notification = {
   id: number
   title: string
@@ -19,7 +30,17 @@ export function NotificationsPage() {
   const fetchNotifications = async () => {
     try {
       const res = await apiClient.get('/notifications/')
-      setNotifications(res.data)
+      // Normalize backend fields: backend sends `type` + `created_at`,
+      // frontend expects `severity` + `timestamp`
+      const normalized: Notification[] = (res.data || []).map((n: NotificationRaw) => ({
+        id: n.id,
+        title: n.title,
+        message: n.message,
+        severity: (n.severity || n.type || 'info') as Notification['severity'],
+        timestamp: n.timestamp || n.created_at || '',
+        read: n.read,
+      }))
+      setNotifications(normalized)
     } catch (err) {
       console.error(err)
     } finally {

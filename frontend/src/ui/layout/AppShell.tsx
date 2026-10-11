@@ -35,6 +35,7 @@ import {
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../state/authStore'
 import { CommandPalette } from '../components/ui/CommandPalette'
+import { ErrorBoundary } from '../components/ui/ErrorBoundary'
 
 type NavItem = { to: string; label: string; icon: React.ComponentType<{ className?: string }> }
 type NavGroup = { group: string; items: NavItem[] }
@@ -369,7 +370,9 @@ export function AppShell() {
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.25, ease: 'easeInOut' }}
               >
-                <Outlet />
+                <ErrorBoundary key={location.pathname}>
+                  <Outlet />
+                </ErrorBoundary>
               </motion.div>
             </AnimatePresence>
           </div>
