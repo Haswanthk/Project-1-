@@ -11,6 +11,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 from app.core.deps import get_current_user, get_db
 from app.models.dataset import Dataset
+from app.models.user import User
 from app.schemas.ai import AIRequest, AIResponse
 from app.services.ai_service import AIServiceLayer
 
@@ -167,7 +168,7 @@ def providers(_: object = Depends(get_current_user)):
 def chat_with_data(
     payload: AIRequest | None = None,
     db: Session = Depends(get_db),
-    _: object = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     prompt = payload.prompt if payload else ""
     messages = payload.messages if payload else None
@@ -192,12 +193,56 @@ def chat_with_data(
         pass
 
     ws_context = "\n\n".join(context_parts)
-    return service.execute_feature(
+    ai_res = service.execute_feature(
         "chat_with_data",
         prompt=prompt,
         context={"workspace": ws_context},
         messages=messages,
     )
+
+    # When Feature Flag is active, attach claim-level provenance and verification
+    from app.core.config import settings
+    if settings.feature_claim_level_trust:
+        from app.services.trust_service import TrustService
+        from app.schemas.trust import ClaimInput
+        trust_service = TrustService(db)
+
+        # Look for referenced dataset in payload context or recent datasets
+        target_ds_id = None
+        if payload and payload.context and "dataset_id" in payload.context:
+            target_ds_id = payload.context["dataset_id"]
+        elif datasets:
+            target_ds_id = datasets[0].id
+
+        # Extract structured claim proposals if present or generate from query
+        evaluated_claims = []
+        if target_ds_id and prompt:
+            # Example: check if prompt mentions specific operations
+            op = "SUM"
+            col = None
+            if datasets and datasets[0].profiling_summary:
+                cols = list(datasets[0].profiling_summary.get("missing_percentages", {}).keys())
+                for c in cols:
+                    if c.lower() in prompt.lower():
+                        col = c
+                        break
+            if col:
+                claim_prop = ClaimInput(
+                    claim_id=f"c_{abs(hash(prompt)) % 10000:04d}",
+                    sentence=ai_res.response or ai_res.answer or prompt,
+                    target_dataset_id=target_ds_id,
+                    column_name=col,
+                    operation=op,
+                    claimed_value=None,  # will be recomputed
+                )
+                res = trust_service.verify_and_release_claim(claim_prop, current_user)
+                evaluated_claims.append(res.dict())
+
+        ai_res.claims = evaluated_claims
+        ai_res.commentary = ai_res.response or ai_res.answer
+        ai_res.unverified_prose_warning = bool(not evaluated_claims)
+
+    return ai_res
 
 
 @router.post("/natural-language-sql", response_model=AIResponse)

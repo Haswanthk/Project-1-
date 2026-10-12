@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     ollama_base_url: str = ""
     local_llama_endpoint: str = ""
 
+    # Claim-Level Trust & Provenance Settings (Default OFF)
+    feature_claim_level_trust: bool = False
+    trust_stale_days_threshold: int = 30
+    trust_missing_pct_warn: float = 0.05
+    trust_missing_pct_fail: float = 0.30
+
     def get_frontend_origins(self) -> list[str]:
         return [part.strip() for part in self.frontend_origins.split(",") if part.strip()]
 

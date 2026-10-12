@@ -17,5 +17,8 @@ class AIResponse(BaseModel):
     response: str | None = None
     answer: str | None = None
     provider: str | None = None
+    commentary: str | None = None
+    claims: list[dict[str, Any]] | None = None
+    unverified_prose_warning: bool | None = None
 
 
