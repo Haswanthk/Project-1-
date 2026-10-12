@@ -31,13 +31,11 @@ class AIServiceLayer:
         system_prompt: str = "",
         messages: list[dict[str, Any]] | None = None,
     ) -> str | None:
-        """Calls Google Gemini API using configured key and gemini-2.5-flash."""
+        """Calls Google Gemini API using configured key and available Gemini models."""
         if not (settings.enable_gemini and settings.gemini_api_key):
             return None
         try:
             import httpx
-
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.gemini_api_key}"
 
             contents = []
             if messages:
@@ -57,17 +55,25 @@ class AIServiceLayer:
             if system_prompt:
                 payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
 
-            with httpx.Client(timeout=25.0) as client:
-                res = client.post(url, json=payload)
-                if res.status_code == 200:
-                    data = res.json()
-                    candidates = data.get("candidates", [])
-                    if candidates and "content" in candidates[0]:
-                        parts = candidates[0]["content"].get("parts", [])
-                        if parts and "text" in parts[0]:
-                            return parts[0]["text"]
-                else:
-                    print(f"Gemini API returned status {res.status_code}: {res.text}")
+            models_to_try = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
+            with httpx.Client(timeout=30.0) as client:
+                for model_name in models_to_try:
+                    try:
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+                        headers = {"x-goog-api-key": settings.gemini_api_key}
+                        res = client.post(url, json=payload, headers=headers)
+                        if res.status_code == 200:
+                            data = res.json()
+                            candidates = data.get("candidates", [])
+                            if candidates and "content" in candidates[0]:
+                                parts = candidates[0]["content"].get("parts", [])
+                                if parts and "text" in parts[0]:
+                                    return parts[0]["text"]
+                        else:
+                            print(f"Gemini model {model_name} returned status {res.status_code}: {res.text[:120]}")
+                    except Exception as model_err:
+                        print(f"Gemini model {model_name} error: {model_err}")
+                        continue
         except Exception as e:
             print(f"Gemini call exception: {e}")
         return None

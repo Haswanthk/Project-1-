@@ -116,6 +116,7 @@ def preview_dataset(
     if not dataset or not dataset.file_path or not Path(dataset.file_path).exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset file not found")
     frame = profiling_service.load_dataset(dataset.file_path)
+    start = (page - 1) * limit
     preview_slice = frame.iloc[start : start + limit]
     values = json.loads(preview_slice.to_json(orient="values"))
     cols = [str(column) for column in frame.columns]
