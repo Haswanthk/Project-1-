@@ -139,9 +139,28 @@ class TrustService:
                         prof_dict = {}
 
                 if prof_dict and isinstance(prof_dict, dict):
-                    missing_dict = prof_dict.get("missing_percentages", {})
-                    if claim.column_name and claim.column_name in missing_dict:
-                        null_pct = float(missing_dict[claim.column_name])
+                    missing_dict = prof_dict.get("missing_percentages")
+                    missing_counts = prof_dict.get("missing_values")
+
+                    if claim.column_name and isinstance(missing_dict, dict) and claim.column_name in missing_dict:
+                        try:
+                            val = float(missing_dict[claim.column_name])
+                            # If missing_percentages was stored as fraction [0, 1] instead of percentage [0, 100], normalize
+                            null_pct = val * 100.0 if (0.0 < val <= 1.0 and not any(v > 1.0 for v in missing_dict.values() if isinstance(v, (int, float)))) else val
+                        except (ValueError, TypeError):
+                            null_pct = None
+                    elif claim.column_name and isinstance(missing_counts, dict) and claim.column_name in missing_counts:
+                        try:
+                            count_val = float(missing_counts[claim.column_name])
+                            total_rows = dataset.row_count or (prof_dict.get("row_count") or 0)
+                            if total_rows > 0:
+                                null_pct = min(100.0, max(0.0, (count_val / total_rows) * 100.0))
+                            else:
+                                null_pct = 0.0
+                        except (ValueError, TypeError):
+                            null_pct = None
+
+                    if null_pct is not None:
                         if null_pct > settings.trust_missing_pct_fail * 100:
                             lineage_status = LineageTrustStatus.FAIL
                             reasons.append(f"Column '{claim.column_name}' missing rate ({null_pct:.1f}%) exceeds failure threshold.")

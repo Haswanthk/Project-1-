@@ -220,16 +220,28 @@ def chat_with_data(
             # Example: check if prompt mentions specific operations
             op = "SUM"
             col = None
-            if datasets and datasets[0].profiling_summary:
-                cols = list(datasets[0].profiling_summary.get("missing_percentages", {}).keys())
-                for c in cols:
-                    if c.lower() in prompt.lower():
-                        col = c
-                        break
+            if datasets and datasets[0].profiling_json:
+                try:
+                    prof_data = json.loads(datasets[0].profiling_json)
+                    if isinstance(prof_data, dict):
+                        cols = list(
+                            (prof_data.get("missing_percentages") or prof_data.get("missing_values") or prof_data.get("schema") or {}).keys()
+                        )
+                        for c in cols:
+                            if isinstance(c, str) and c.lower() in prompt.lower():
+                                col = c
+                                break
+                except Exception:
+                    pass
             if col:
+                resp_text = (
+                    ai_res.get("response") or ai_res.get("answer") or prompt
+                    if isinstance(ai_res, dict)
+                    else getattr(ai_res, "response", None) or getattr(ai_res, "answer", None) or prompt
+                )
                 claim_prop = ClaimInput(
                     claim_id=f"c_{abs(hash(prompt)) % 10000:04d}",
-                    sentence=ai_res.response or ai_res.answer or prompt,
+                    sentence=resp_text,
                     target_dataset_id=target_ds_id,
                     column_name=col,
                     operation=op,
@@ -238,9 +250,19 @@ def chat_with_data(
                 res = trust_service.verify_and_release_claim(claim_prop, current_user)
                 evaluated_claims.append(res.dict())
 
-        ai_res.claims = evaluated_claims
-        ai_res.commentary = ai_res.response or ai_res.answer
-        ai_res.unverified_prose_warning = bool(not evaluated_claims)
+        comm = (
+            ai_res.get("response") or ai_res.get("answer")
+            if isinstance(ai_res, dict)
+            else getattr(ai_res, "response", None) or getattr(ai_res, "answer", None)
+        )
+        if isinstance(ai_res, dict):
+            ai_res["claims"] = evaluated_claims
+            ai_res["commentary"] = comm
+            ai_res["unverified_prose_warning"] = bool(not evaluated_claims)
+        else:
+            ai_res.claims = evaluated_claims
+            ai_res.commentary = comm
+            ai_res.unverified_prose_warning = bool(not evaluated_claims)
 
     return ai_res
 

@@ -167,3 +167,59 @@ def test_authorization_and_non_enumeration(db_session):
 
     # User B can resolve their own handle
     assert service.resolve_evidence(ev_b.handle_id, user_b) is not None
+
+
+def test_null_rate_evaluation_with_counts_and_malformed_profiling(db_session, tmp_path):
+    """Regression test: verify missing_percentages, missing_values, and malformed profiling data are handled safely."""
+    import json
+    from app.models.dataset import Dataset
+    from app.models.trust import LineageTrustStatus
+
+    user = User(email="prof_test@enterprise.ai", full_name="Prof Tester", hashed_password="pw", role=Role.analyst)
+    db_session.add(user)
+    db_session.commit()
+
+    # Create dummy csv file
+    test_file = tmp_path / "test_data.csv"
+    test_file.write_text("revenue,region\n100,US\n200,EU\n300,AP\n", encoding="utf-8")
+
+    # Case A: Profiling with missing_values counts instead of missing_percentages
+    # 1 null out of 3 rows = 33.3% > 20% fail threshold
+    prof_counts = {"missing_values": {"revenue": 1}, "row_count": 3}
+    ds_counts = Dataset(
+        name="counts.csv",
+        source_type="csv",
+        file_path=str(test_file),
+        uploaded_by=user.id,
+        row_count=3,
+        profiling_json=json.dumps(prof_counts),
+    )
+    db_session.add(ds_counts)
+    db_session.commit()
+
+    service = TrustService(db_session)
+    c1 = ClaimInput(claim_id="c_cnt", sentence="Sum is 600", target_dataset_id=ds_counts.id, column_name="revenue", operation="SUM", claimed_value=600.0)
+    res1 = service.verify_and_release_claim(c1, user)
+    assert res1.null_percentage is not None
+    assert abs(res1.null_percentage - 33.3333) < 0.1
+    assert res1.lineage_trust_status == LineageTrustStatus.FAIL
+    assert res1.release_decision == ReleaseDecision.WITHHELD
+
+    # Case B: Profiling with malformed non-JSON string
+    ds_malformed = Dataset(
+        name="malformed.csv",
+        source_type="csv",
+        file_path=str(test_file),
+        uploaded_by=user.id,
+        row_count=3,
+        profiling_json="{NOT_VALID_JSON",
+    )
+    db_session.add(ds_malformed)
+    db_session.commit()
+
+    c2 = ClaimInput(claim_id="c_mal", sentence="Sum is 600", target_dataset_id=ds_malformed.id, column_name="revenue", operation="SUM", claimed_value=600.0)
+    res2 = service.verify_and_release_claim(c2, user)
+    # Should not crash, null_percentage defaults to None, calculation proceeds
+    assert res2.calculation_status == CalculationStatus.MATCH
+    assert res2.null_percentage is None
+
