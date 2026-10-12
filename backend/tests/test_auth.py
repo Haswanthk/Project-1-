@@ -1,9 +1,7 @@
 from fastapi.testclient import TestClient
 from app.main import app
 
-client = TestClient(app)
-
-def test_register_and_login():
+def test_register_and_login(client):
     email = "testuser_unique@enterprise.ai"
     password = "SecurePassword123!"
 
