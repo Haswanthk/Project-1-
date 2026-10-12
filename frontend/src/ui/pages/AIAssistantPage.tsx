@@ -3,8 +3,15 @@ import { motion } from 'framer-motion'
 import { Bot, Send, User, Sparkles, Loader2, Trash2, Cpu } from 'lucide-react'
 import { apiClient } from '../lib/api'
 import { PageHeader } from '../components/ui/PageHeader'
+import { ClaimBadge } from '../components/ClaimBadge'
+import type { ClaimVerificationResult } from '../../types/trust'
 
-type Message = { role: 'user' | 'assistant'; content: string; timestamp: string }
+type Message = {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: string
+  claims?: ClaimVerificationResult[]
+}
 
 export function AIAssistantPage() {
   const [messages, setMessages] = useState<Message[]>([
@@ -46,12 +53,15 @@ export function AIAssistantPage() {
         res.data.response ||
         res.data.answer ||
         (typeof res.data === 'string' ? res.data : 'Analysis completed.')
+      const returnedClaims = res.data.claims || undefined
+
       setMessages(prev => [
         ...prev,
         {
           role: 'assistant',
           content: answer,
           timestamp: new Date().toISOString(),
+          claims: returnedClaims,
         },
       ])
     } catch (err: any) {
@@ -138,6 +148,13 @@ export function AIAssistantPage() {
                 }`}
               >
                 <div className="whitespace-pre-wrap font-sans space-y-2">{msg.content}</div>
+                {msg.claims && msg.claims.length > 0 && (
+                  <div className="mt-3 pt-2.5 border-t border-[var(--c-border)] flex flex-wrap gap-1.5">
+                    {msg.claims.map((claim, idx) => (
+                      <ClaimBadge key={idx} claim={claim} />
+                    ))}
+                  </div>
+                )}
                 <p className="text-[10px] text-[var(--c-text-muted)] mt-2.5">
                   {new Date(msg.timestamp).toLocaleTimeString()}
                 </p>
