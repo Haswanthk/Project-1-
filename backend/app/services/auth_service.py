@@ -22,11 +22,19 @@ class AuthService:
     def register(self, payload: RegisterRequest) -> User:
         if self.user_repo.get_by_email(payload.email):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+        # Privilege escalation safeguard: public self-registration cannot grant Role.admin.
+        # Self-assigned admin requests are demoted to viewer; analyst is permitted if requested.
+        assigned_role = Role.viewer
+        if payload.role == Role.analyst:
+            assigned_role = Role.analyst
+        else:
+            assigned_role = Role.viewer
+
         user = User(
             email=payload.email.lower().strip(),
             full_name=payload.full_name.strip(),
             hashed_password=get_password_hash(payload.password),
-            role=Role.admin,
+            role=assigned_role,
         )
         user = self.user_repo.create(user)
         verification_token = self._issue_user_token(user.id, "email_verification", timedelta(hours=24))

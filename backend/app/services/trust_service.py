@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import os
 import time
@@ -26,9 +27,48 @@ from app.models.user import User, Role
 from app.schemas.trust import ClaimInput, ClaimVerificationResult
 
 
+class AuditCheckpointStore:
+    """
+    Independent out-of-band anchor for audit chain checkpoints.
+    Enables detection of tail truncation (silent deletion of trailing audit records)
+    which cannot be detected by database hash linkages alone.
+    """
+
+    def __init__(self, storage_dir: Optional[str] = None):
+        self.storage_dir = storage_dir
+        self._memory_checkpoints: dict[int, dict[str, Any]] = {}
+
+    def record_checkpoint(self, user_id: int, sequence_id: int, head_hash: str) -> dict[str, Any]:
+        cp = {
+            "user_id": user_id,
+            "sequence_id": sequence_id,
+            "head_hash": head_hash,
+            "anchored_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._memory_checkpoints[user_id] = cp
+        if self.storage_dir:
+            os.makedirs(self.storage_dir, exist_ok=True)
+            p = os.path.join(self.storage_dir, f"checkpoint_user_{user_id}.json")
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(cp, f, indent=2)
+        return cp
+
+    def get_latest_checkpoint(self, user_id: int) -> Optional[dict[str, Any]]:
+        if self.storage_dir:
+            p = os.path.join(self.storage_dir, f"checkpoint_user_{user_id}.json")
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception:
+                    pass
+        return self._memory_checkpoints.get(user_id)
+
+
 class TrustService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, checkpoint_store: Optional[AuditCheckpointStore] = None):
         self.db = db
+        self.checkpoint_store = checkpoint_store
 
     def mint_evidence(
         self,
@@ -169,12 +209,21 @@ class TrustService:
                                 lineage_status = LineageTrustStatus.WARN
                             reasons.append(f"Column '{claim.column_name}' missing rate ({null_pct:.1f}%) exceeds warning threshold.")
 
-                # Recompute arithmetic calculation independently on immutable snapshot
+                # Recompute arithmetic calculation independently on immutable single-read snapshot (TOCTOU safe)
                 if dataset.file_path and os.path.exists(dataset.file_path):
-                    snapshot_hash = self._compute_file_sha256(dataset.file_path)
-                    recomputed_val, recompute_err = self._recompute_scalar(
-                        dataset.file_path, claim.column_name, claim.operation
-                    )
+                    try:
+                        with open(dataset.file_path, "rb") as f:
+                            file_bytes = f.read()
+                        snapshot_hash = hashlib.sha256(file_bytes).hexdigest()
+                        ext = Path(dataset.file_path).suffix.lower()
+                        recomputed_val, recompute_err = self._recompute_scalar_from_bytes(
+                            file_bytes, ext, claim.column_name, claim.operation
+                        )
+                    except Exception as e:
+                        snapshot_hash = None
+                        recomputed_val = None
+                        recompute_err = f"Failed to read dataset snapshot: {e}"
+
                     if recompute_err:
                         calc_status = CalculationStatus.NOT_RECOMPUTABLE
                         reasons.append(f"Recomputation failed: {recompute_err}")
@@ -294,15 +343,15 @@ class TrustService:
 
         return ReleaseDecision.WITHHELD
 
-    def _recompute_scalar(
-        self, file_path: str, column_name: Optional[str], operation: str
+    def _recompute_scalar_from_bytes(
+        self, file_bytes: bytes, ext: str, column_name: Optional[str], operation: str
     ) -> Tuple[Optional[float], Optional[str]]:
         try:
-            ext = Path(file_path).suffix.lower()
+            buffer = io.BytesIO(file_bytes)
             if ext == ".csv":
-                df = pd.read_csv(file_path)
+                df = pd.read_csv(buffer)
             elif ext in [".xlsx", ".xls"]:
-                df = pd.read_excel(file_path)
+                df = pd.read_excel(buffer)
             else:
                 return None, f"Unsupported file type '{ext}'"
 
@@ -326,6 +375,17 @@ class TrustService:
                 return float(series.max()), None
             else:
                 return None, f"Unsupported aggregation operation '{operation}'"
+        except Exception as e:
+            return None, str(e)
+
+    def _recompute_scalar(
+        self, file_path: str, column_name: Optional[str], operation: str
+    ) -> Tuple[Optional[float], Optional[str]]:
+        try:
+            with open(file_path, "rb") as f:
+                file_bytes = f.read()
+            ext = Path(file_path).suffix.lower()
+            return self._recompute_scalar_from_bytes(file_bytes, ext, column_name, operation)
         except Exception as e:
             return None, str(e)
 
@@ -397,6 +457,12 @@ class TrustService:
                 self.db.add(audit_entry)
                 self.db.commit()
                 self.db.refresh(audit_entry)
+                if self.checkpoint_store:
+                    self.checkpoint_store.record_checkpoint(
+                        user_id=user_id,
+                        sequence_id=next_seq,
+                        head_hash=record_hash,
+                    )
                 return audit_entry
             except (IntegrityError, OperationalError) as e:
                 self.db.rollback()
@@ -419,6 +485,11 @@ class TrustService:
         it also detects tail truncation (silent deletion of final records).
         Returns: (is_valid, chain_length, tampered_sequence_id, message, latest_hash)
         """
+        if expected_head_hash is None and self.checkpoint_store:
+            cp = self.checkpoint_store.get_latest_checkpoint(user_id)
+            if cp:
+                expected_head_hash = cp.get("head_hash")
+
         records = (
             self.db.query(ClaimReleaseAudit)
             .filter(ClaimReleaseAudit.user_id == user_id)
@@ -469,7 +540,12 @@ class TrustService:
                 latest_hash,
             )
 
-        return True, len(records), None, "Audit chain verified intact.", latest_hash
+        status_msg = (
+            "Audit chain verified intact with trusted checkpoint anchor."
+            if expected_head_hash
+            else "Audit chain verified intact (internal consistency verified; external checkpoint anchor not configured)."
+        )
+        return True, len(records), None, status_msg, latest_hash
 
     @staticmethod
     def _compute_file_sha256(file_path: str) -> str:
